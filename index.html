@@ -598,8 +598,7 @@
    Leave empty to run in demo mode with sample data.
    ============================================================= */
 const CONFIG = {
-  // ===== STAGING BUILD — paste the STAGING Apps Script /exec URL below =====
-  // (Must be the Bollin_Inventory_STAGING sheet, NOT production.)
+  // ===== STAGING BUILD — points at Bollin_Inventory_STAGING =====
   API_URL: "https://script.google.com/macros/s/AKfycbyp5zq5YvMMcLzpdYeMmBLGZLSKWD_9gWPIwEWLChHVPqN_Jh_r4Z6uCs8wRZGhizf7Tw/exec"
 };
 const TRACKER_TAB = {consumables:'Consumables',meds:'Meds',garments:'Garments',instruments:'Instruments',linen:'Linen'};
@@ -911,7 +910,15 @@ function actBadge(a){
   return `<span class="badge ${cls}">${a||'—'}</span>`;
 }
 function logView(){
-  const rows = state.log.map(l=>`<tr>
+  const q = (window._lgq||'').toLowerCase();
+  const fa = window._lgAct||'', fb = window._lgBy||'', ft = window._lgTracker||'';
+  const uniq = k => [...new Set(state.log.map(x=>x[k]).filter(Boolean))].sort();
+  const acts = uniq('activity'), bys = uniq('by'), tracks = uniq('tracker');
+  const filtered = state.log.filter(l=>
+    (!fa || l.activity===fa) && (!fb || l.by===fb) && (!ft || l.tracker===ft) &&
+    (!q || (l.name||'').toLowerCase().includes(q) || (l.code||'').toLowerCase().includes(q) ||
+           (l.note||'').toLowerCase().includes(q)));
+  const rows = filtered.map(l=>`<tr>
       <td data-label=""><strong>${l.name||'—'}</strong></td>
       <td data-label="Activity">${actBadge(l.activity)}</td>
       <td data-label="When">${l.ts?new Date(l.ts).toLocaleString('en-GB'):''}</td>
@@ -936,8 +943,38 @@ function logView(){
       </span>
       <button class="btn primary" onclick="txReportPDF()">Download PDF</button>
     </div>`:''}
-    <table><thead><tr><th>Item</th><th>Activity</th><th>When</th><th>Code</th><th class="qty">Qty</th><th>By</th><th>Tracker</th><th>Details</th></tr></thead>
-    <tbody>${rows||'<tr><td colspan="8" style="color:var(--ink-soft)">No activity yet.</td></tr>'}</tbody></table>`;
+    <div class="toolrow">
+      <select onchange="window._lgAct=this.value;refreshLog()">
+        <option value="">All activities</option>
+        ${acts.map(a=>`<option ${a===fa?'selected':''}>${a}</option>`).join('')}
+      </select>
+      <select onchange="window._lgBy=this.value;refreshLog()">
+        <option value="">Anyone</option>
+        ${bys.map(b=>`<option ${b===fb?'selected':''}>${b}</option>`).join('')}
+      </select>
+      <select onchange="window._lgTracker=this.value;refreshLog()">
+        <option value="">All trackers</option>
+        ${tracks.map(t=>`<option ${t===ft?'selected':''}>${t}</option>`).join('')}
+      </select>
+      <input type="search" placeholder="Search item, code or details…" value="${window._lgq||''}"
+             oninput="window._lgq=this.value;refreshLog()">
+      ${(fa||fb||ft||q)?`<button class="btn" onclick="clearLogFilters()">Clear</button>`:''}
+      <span style="color:var(--ink-soft);font-size:13px;margin-left:auto">${filtered.length} of ${state.log.length}</span>
+    </div>
+    <div id="logWrap"><table><thead><tr><th>Item</th><th>Activity</th><th>When</th><th>Code</th><th class="qty">Qty</th><th>By</th><th>Tracker</th><th>Details</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="8" style="color:var(--ink-soft)">No activity matches.</td></tr>'}</tbody></table></div>`;
+}
+function refreshLog(){
+  if(currentView!=='log') return;
+  const el = document.getElementById('logWrap');
+  if(!el) return;
+  const tmp = document.createElement('div'); tmp.innerHTML = logView();
+  const fresh = tmp.querySelector('#logWrap');
+  if(fresh) el.innerHTML = fresh.innerHTML;
+}
+function clearLogFilters(){
+  window._lgAct=''; window._lgBy=''; window._lgTracker=''; window._lgq='';
+  render();
 }
 
 function resolveRange(prefix){
@@ -1172,7 +1209,10 @@ function sterilUseTab(pending){
       <td data-label=""><strong>${d.name||d.code}</strong> <span class="code" style="font-family:var(--mono);font-size:12px">${d.code}</span></td>
       <td data-label="Used">${dFmt(d.dateUsed)}${d.usedBy?' · '+d.usedBy:''}</td>
       <td class="qty" data-label="Qty">${d.qtyOut}</td>
-      <td data-label="Status">${DSTATUS[d.status]||d.status}</td></tr>`;
+      <td data-label="Status">${DSTATUS[d.status]||d.status}</td>
+      ${can('useedit')?`<td class="rowbtns" data-label="">
+        <button onclick="openUseEdit(${ix})">Edit</button>
+        <button onclick="deleteUse(${ix})" style="color:var(--red)">✕</button></td>`:''}</tr>`;
   }).join('');
   return `
     <div class="toolrow">
@@ -1183,8 +1223,38 @@ function sterilUseTab(pending){
       <button class="btn primary" onclick="logUsed()">Log as used</button>
     </div>
     <div class="sub">Scanning anywhere on this tab logs the instrument instantly (count 1). Items below are waiting for the next dispatch.</div>
-    <table><thead><tr><th>Instrument / Tray</th><th>Used</th><th class="qty">Qty</th><th>Status</th></tr></thead>
-    <tbody>${rows||'<tr><td colspan="4" style="color:var(--ink-soft)">Nothing pending collection.</td></tr>'}</tbody></table>`;
+    <table><thead><tr><th>Instrument / Tray</th><th>Used</th><th class="qty">Qty</th><th>Status</th>${can('useedit')?'<th>Correct</th>':''}</tr></thead>
+    <tbody>${rows||`<tr><td colspan="${can('useedit')?5:4}" style="color:var(--ink-soft)">Nothing pending collection.</td></tr>`}</tbody></table>`;
+}
+
+function openUseEdit(ix){
+  const d = state.dispatch[ix];
+  if(!d || d.status!=='Pending Collection'){ toast('Only items still pending collection can be edited'); return; }
+  const name = prompt('Instrument / tray name:', d.name||'');
+  if(name===null) return;
+  const qtyS = prompt('Quantity:', d.qtyOut||1);
+  if(qtyS===null) return;
+  const qty = Math.max(1, parseInt(qtyS)||1);
+  const codeS = prompt('Code (leave as-is if unsure):', d.code||'');
+  if(codeS===null) return;
+  d.name=name.trim(); d.qtyOut=qty; d.code=codeS.trim();
+  render(); toast('Corrected');
+  if(LIVE && d._row){
+    api({action:'useEdit', row:d._row, name:d.name, code:d.code, qty:d.qtyOut})
+      .then(()=>loadAll()).catch(e=>{toast('Not saved — '+e.message); loadAll();});
+  }
+}
+async function deleteUse(ix){
+  const d = state.dispatch[ix];
+  if(!d || d.status!=='Pending Collection'){ toast('Only pending items can be removed here'); return; }
+  if(!confirm('Remove "'+(d.name||d.code)+'" from the pending list? Use this to undo a logging mistake.')) return;
+  const row = d._row;
+  state.dispatch.splice(ix,1);
+  render(); toast('Removed');
+  if(LIVE && row){
+    try{ await api({action:'useDelete', row}); loadAll(); }
+    catch(e){ toast('Not saved — '+e.message); loadAll(); }
+  }
 }
 function logUsed(codeArg, qtyArg){
   const code = (codeArg || $('#useCode').value).trim();
@@ -2398,7 +2468,7 @@ function refreshValues(){
 async function markObsolete(ix){
   const it = state.items[ix];
   if(!confirm('Move "'+it.name+'" to obsolete stock? It will disappear from all lists and alerts, but stays saved and can be restored anytime.')) return;
-  it.obsolete = true; render();
+  it.obsolete = true; it.obsBy = myName||''; it.obsAt = new Date().toISOString(); render();
   toast('Moved to obsolete: '+it.name);
   if(LIVE && it._row){
     try{ await api({action:'updateItem', tracker:TRACKER_TAB[it.tracker], row:it._row,
@@ -2408,7 +2478,7 @@ async function markObsolete(ix){
 }
 async function restoreItem(ix){
   const it = state.items[ix];
-  it.obsolete = false; render();
+  it.obsolete = false; it.obsBy=''; it.obsAt=''; render();
   toast('Restored: '+it.name);
   if(LIVE && it._row){
     try{ await api({action:'updateItem', tracker:TRACKER_TAB[it.tracker], row:it._row,
@@ -2423,11 +2493,13 @@ function obsoleteView(){
       <td data-label="Tracker">${TRACKER_LABEL[it.tracker]}</td>
       <td data-label="Category">${it.cat||'—'}</td>
       <td class="qty" data-label="Qty">${it.qty}</td>
+      <td data-label="Made obsolete by">${it.obsBy||'—'}</td>
+      <td data-label="When">${it.obsAt?new Date(it.obsAt).toLocaleString('en-GB'):'—'}</td>
       <td class="rowbtns" data-label=""><button onclick="restoreItem(${ix})">Restore</button></td></tr>`).join('');
   return `<h1>Obsolete stock</h1>
     <div class="sub">Dead stock kept out of the way — no alerts, no low-stock lists, hidden from trackers. Restore anytime if needed again. Mark items obsolete from the "Obsolete" button on any tracker row.</div>
-    <table><thead><tr><th>Item</th><th>Tracker</th><th>Category</th><th class="qty">Qty</th><th></th></tr></thead>
-    <tbody>${rows||'<tr><td colspan="5" style="color:var(--ink-soft)">Nothing marked obsolete.</td></tr>'}</tbody></table>`;
+    <table><thead><tr><th>Item</th><th>Tracker</th><th>Category</th><th class="qty">Qty</th><th>Made obsolete by</th><th>When</th><th></th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="7" style="color:var(--ink-soft)">Nothing marked obsolete.</td></tr>'}</tbody></table>`;
 }
 
 /* ---------------- stores & transfers — admin only ---------------- */
@@ -3048,7 +3120,8 @@ function mapItem(tab, r){
     cost: r.UnitCost!=null && r.UnitCost!=='' ? Number(r.UnitCost) : null,
     expiry: r.Expiry ? String(r.Expiry).slice(0,10) : null,
     batch: r.Batch||'', status: r.Status||'',
-    obsolete: String(r.Obsolete||'').toLowerCase()==='yes'};
+    obsolete: String(r.Obsolete||'').toLowerCase()==='yes',
+    obsBy: r.ObsoleteBy||'', obsAt: r.ObsoleteAt||''};
 }
 
 async function loadAll(){
@@ -3138,9 +3211,9 @@ try { session = JSON.parse(localStorage.getItem('bollin_session')||'null'); } ca
 if(session) myName = session.displayName || '';
 
 const PERMS = {
-  admin:  {add:1, edit:1, labels:1, values:1, stocktake:1, implants:1, dispatch:1, receive:1, respond:1, ack:1, alerts:1, instr:1, reports:1, obsolete:1, stores:1, assets:1},
-  staff:  {add:0, edit:0, labels:0, values:1, stocktake:1, implants:1, dispatch:1, receive:1, respond:1, ack:1, alerts:1, instr:1, reports:1, obsolete:0, stores:0, assets:0},
-  common: {add:0, edit:0, labels:0, values:0, stocktake:0, implants:0, dispatch:0, receive:0, respond:0, ack:0, alerts:0, instr:0, reports:0, obsolete:0, stores:0, assets:0}
+  admin:  {add:1, edit:1, labels:1, values:1, stocktake:1, implants:1, dispatch:1, receive:1, respond:1, ack:1, alerts:1, instr:1, reports:1, obsolete:1, stores:1, assets:1, useedit:1},
+  staff:  {add:0, edit:0, labels:0, values:1, stocktake:1, implants:1, dispatch:1, receive:1, respond:1, ack:1, alerts:1, instr:1, reports:1, obsolete:0, stores:0, assets:0, useedit:0},
+  common: {add:0, edit:0, labels:0, values:0, stocktake:0, implants:0, dispatch:0, receive:0, respond:0, ack:0, alerts:0, instr:0, reports:0, obsolete:0, stores:0, assets:0, useedit:0}
 };
 function role(){ return LIVE ? (session ? session.role : null) : 'admin'; }
 function can(p){ const r = role(); return !!(r && PERMS[r] && PERMS[r][p]); }
