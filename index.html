@@ -1,0 +1,3225 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[STAGING] Bollin Clinic — Inventory</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#2B6168">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bollin Stock">
+<!-- ============================================================
+  BOLLIN CLINIC INVENTORY  ·  v0.1
+  Single-file app for GitHub Pages.
+  Scanner: Netum USB dongle (keyboard wedge). The app listens for
+  scanner input globally — no field needs to be focused.
+  Data: demo data below until Azure AD consent is granted, then
+  Microsoft Graph reads/writes the SharePoint Excel files.
+  ============================================================ -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  :root{
+    --pine:#2B6168;      /* primary — Bollin teal (from logo) */
+    --pine-deep:#1C4A50;
+    --gold:#B08A3E;      /* Bollin gold (from logo)           */
+    --gold-soft:#F6EFDF;
+    --mist:#F4F7F6;      /* app background                   */
+    --card:#FFFFFF;
+    --ink:#17251F;
+    --ink-soft:#5B6B65;
+    --line:#DCE5E2;
+    --amber:#9A5B00;     /* low stock                        */
+    --amber-bg:#FFF4E0;
+    --red:#A61B1B;       /* out of stock / expired           */
+    --red-bg:#FCE9E7;
+    --ok:#0E5048;
+    --ok-bg:#E4F0ED;
+    --exp:#7A4A00;
+    --exp-bg:#FFF0D6;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--sans);background:var(--mist);color:var(--ink);font-size:15px}
+  button{font-family:inherit;cursor:pointer}
+  input,select{font-family:inherit;font-size:14px}
+
+  /* ---------- layout ---------- */
+  .app{display:grid;grid-template-columns:236px 1fr;grid-template-rows:auto 1fr;height:100vh}
+  header.scanbar{grid-column:1/-1;background:#fff;color:var(--ink);display:flex;align-items:center;gap:18px;padding:12px 20px;border-bottom:2px solid var(--gold)}
+  .brand{display:flex;align-items:center}
+  .brand img{height:58px;display:block}
+  .scanwrap{flex:1;display:flex;align-items:center;gap:10px;background:var(--mist);border:1px solid var(--line);border-radius:9px;padding:11px 14px;max-width:620px}
+  .pulse{width:9px;height:9px;border-radius:50%;background:var(--gold);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  @media (prefers-reduced-motion:reduce){.pulse{animation:none}}
+  #scanInput{font-family:var(--mono);font-size:14.5px;color:var(--ink);background:transparent;border:none;outline:none;flex:1;min-width:0}
+  #scanInput::placeholder{color:var(--ink-soft);opacity:.9}
+  #scanEcho{font-family:var(--mono);font-size:12px;color:var(--pine);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:38%}
+  .userbox{font-size:12px;color:var(--ink-soft);text-align:right}
+  .userbox button{background:transparent;border:1px solid var(--line);color:var(--pine);border-radius:6px;padding:4px 10px;font-size:12px;font-weight:600}
+
+  /* ===== premium enterprise navigation ===== */
+  nav{background:linear-gradient(180deg,#FFFFFF 0%,#FBFAF6 100%);border-right:1px solid #EAE5DA;
+      padding:20px 0 28px;overflow-y:auto;font-family:'Inter',system-ui,var(--sans)}
+  nav a{position:relative;display:flex;align-items:center;gap:12px;margin:2px 12px;padding:11px 14px;
+      border-radius:10px;color:#5D5A50;text-decoration:none;font-weight:500;font-size:14.5px;
+      letter-spacing:.1px;border-left:none;transition:all .2s ease}
+  nav a::before{content:'';width:18px;height:18px;flex-shrink:0;background-color:currentColor;opacity:.7;
+      -webkit-mask:var(--icn) center/contain no-repeat;mask:var(--icn) center/contain no-repeat;
+      transition:all .2s ease}
+  nav a:hover{background:rgba(138,123,84,0.08);color:#8A7B54;transform:translateX(1px)}
+  nav a.active{background:rgba(138,123,84,0.13);color:#6E6140;font-weight:600;
+      box-shadow:inset 0 0 0 1px rgba(138,123,84,.20)}
+  nav a.active::before{opacity:1}
+  nav .navsec{padding:24px 26px 8px;font-size:10.5px;letter-spacing:2.4px;text-transform:uppercase;
+      color:#8A7B54;font-weight:700;font-family:'Inter',system-ui,var(--sans)}
+  nav .navsec:first-child{padding-top:6px}
+  nav a:focus-visible{outline:2px solid #8A7B54;outline-offset:2px}
+  /* per-item line icons (mask, so they inherit text colour) */
+  nav a[data-view=dashboard]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='7' height='7' rx='1.5'/%3E%3Crect x='14' y='3' width='7' height='7' rx='1.5'/%3E%3Crect x='3' y='14' width='7' height='7' rx='1.5'/%3E%3Crect x='14' y='14' width='7' height='7' rx='1.5'/%3E%3C/svg%3E")}
+  nav a[data-view=consumables]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 8l-9-5-9 5v8l9 5 9-5z'/%3E%3Cpath d='M3 8l9 5 9-5'/%3E%3Cpath d='M12 13v8'/%3E%3C/svg%3E")}
+  nav a[data-view=meds]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 8v8M8 12h8'/%3E%3C/svg%3E")}
+  nav a[data-view=garments]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 3l5 3-2 4-2-1v11H7V9L5 10 3 6l5-3a4 4 0 0 0 8 0z'/%3E%3C/svg%3E")}
+  nav a[data-view=instruments]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6' cy='6' r='2.6'/%3E%3Ccircle cx='6' cy='18' r='2.6'/%3E%3Cpath d='M20 4L8.2 15.8M14.6 14.6L20 20M8.2 8.2L12 12'/%3E%3C/svg%3E")}
+  nav a[data-view=linen]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2l10 6-10 6L2 8z'/%3E%3Cpath d='M2 14l10 6 10-6'/%3E%3C/svg%3E")}
+  nav a[data-view=implants]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 21C7 16.2 3 12.6 3 8.8 3 6.2 5 4 7.5 4c1.7 0 3.3 1 4.5 2.6C13.2 5 14.8 4 16.5 4 19 4 21 6.2 21 8.8c0 3.8-4 7.4-9 12.2z'/%3E%3C/svg%3E")}
+  nav a[data-view=log]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 6h13M8 12h13M8 18h13'/%3E%3Cpath d='M3.5 6h.01M3.5 12h.01M3.5 18h.01'/%3E%3C/svg%3E")}
+  nav a[data-view=requests]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 13h-5l-2 3h-6l-2-3H2'/%3E%3Cpath d='M5 5h14l3 8v6H2v-6z'/%3E%3C/svg%3E")}
+  nav a[data-view=alerts]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8'/%3E%3Cpath d='M10 21a2.2 2.2 0 0 0 4 0'/%3E%3C/svg%3E")}
+  nav a[data-view=gas]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 5V3h6v2'/%3E%3Crect x='7' y='5' width='10' height='17' rx='4'/%3E%3Cpath d='M10 11h4'/%3E%3C/svg%3E")}
+  nav a[data-view=stocktake]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='4' width='14' height='17' rx='2'/%3E%3Cpath d='M9 4a3 3 0 0 1 6 0'/%3E%3Cpath d='M9 13.5l2 2 4-4.5'/%3E%3C/svg%3E")}
+  nav a[data-view=labels]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.6 12.6L12.6 20.6a2 2 0 0 1-2.8 0L3 13.8V4h9.8l7.8 7.8a2 2 0 0 1 0 .8z'/%3E%3Cpath d='M7.5 7.5h.01'/%3E%3C/svg%3E")}
+  nav a[data-view=values]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3v18h18'/%3E%3Cpath d='M7 14l4-4 3 3 5-6'/%3E%3C/svg%3E")}
+  nav a[data-view=stores]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h13l-3.2-3.2M20 17H7l3.2 3.2'/%3E%3C/svg%3E")}
+  nav a[data-view=obsolete]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='4' rx='1'/%3E%3Cpath d='M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8'/%3E%3Cpath d='M10 12h4'/%3E%3C/svg%3E")}
+  nav a[data-view=assets]{--icn:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='6' y='6' width='12' height='12' rx='1.5'/%3E%3Crect x='10' y='10' width='4' height='4'/%3E%3Cpath d='M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3'/%3E%3C/svg%3E")}
+
+  main{overflow-y:auto;padding:22px 26px}
+  h1{font-size:20px;font-weight:700;margin-bottom:2px}
+  .sub{color:var(--ink-soft);font-size:13px;margin-bottom:18px}
+
+  /* ---------- dashboard tiles ---------- */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:22px}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;cursor:pointer;transition:border-color .15s}
+  .tile:hover{border-color:var(--pine)}
+  .tile{position:relative}
+  .tile .ic{position:absolute;top:10px;right:12px;font-size:19px;opacity:.9}
+  @keyframes attnGlow{0%,100%{box-shadow:0 0 0 0 rgba(176,138,62,0)}50%{box-shadow:0 0 0 6px rgba(176,138,62,.28)}}
+  .tile.attn{border-color:var(--gold);animation:attnGlow 1.7s infinite}
+  @keyframes navBlink{0%,100%{opacity:1}50%{opacity:.35}}
+  .navdot{display:inline-block;min-width:19px;height:19px;border-radius:99px;background:var(--red);color:#fff;
+          font-size:11px;font-weight:700;line-height:19px;text-align:center;padding:0 5px;margin-left:7px;
+          animation:navBlink 1.4s infinite}
+  @media (prefers-reduced-motion:reduce){.tile.attn,.navdot{animation:none}}
+  .tile .n{font-size:26px;font-weight:700;font-family:var(--mono)}
+  .tile .l{font-size:12px;color:var(--ink-soft);margin-top:2px}
+  .tile.warn .n{color:var(--amber)} .tile.bad .n{color:var(--red)} .tile.exp .n{color:var(--exp)}
+
+  /* ---------- tables ---------- */
+  .toolrow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+  .toolrow input[type=search]{flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+  .toolrow select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:13.5px}
+  thead th{text-align:left;font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--ink-soft);padding:10px 12px;border-bottom:1px solid var(--line);background:#FAFCFB}
+  tbody td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:#F6FAF8}
+  td.code,td.qty{font-family:var(--mono);font-size:12.5px}
+  td.qty{text-align:right}
+  th.qty{text-align:right}
+  .badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:600}
+  .b-ok{background:var(--ok-bg);color:var(--ok)}
+  .b-low{background:var(--amber-bg);color:var(--amber)}
+  .b-out{background:var(--red-bg);color:var(--red)}
+  .b-exp{background:var(--exp-bg);color:var(--exp)}
+  .rowbtns button{border:1px solid var(--line);background:var(--card);border-radius:6px;padding:4px 10px;font-size:12px;font-weight:600;color:var(--pine)}
+  .rowbtns button:hover{background:var(--ok-bg)}
+
+  /* ---------- modal ---------- */
+  dialog{border:none;border-radius:12px;padding:0;max-width:430px;width:92vw;box-shadow:0 18px 50px rgba(10,40,35,.25)}
+  dialog::backdrop{background:rgba(14,60,53,.45)}
+  .m-head{background:var(--pine);color:#fff;padding:14px 18px;font-weight:600}
+  .m-body{padding:18px}
+  .m-body .itname{font-weight:600;margin-bottom:2px}
+  .m-body .itcode{font-family:var(--mono);font-size:12px;color:var(--ink-soft);margin-bottom:14px}
+  .m-row{display:flex;gap:10px;margin-bottom:12px;align-items:center}
+  .m-row label{width:96px;font-size:13px;color:var(--ink-soft)}
+  .m-row input,.m-row select{flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:8px}
+  .m-actions{display:flex;gap:10px;justify-content:flex-end;padding:0 18px 18px}
+  .btn{border-radius:8px;padding:9px 16px;font-weight:600;font-size:14px;border:1px solid var(--line);background:var(--card)}
+  .btn.primary{background:var(--pine);color:#fff;border-color:var(--pine)}
+  .btn.primary:hover{background:var(--pine-deep)}
+  .segbtn{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:1}
+  .segbtn button{flex:1;padding:8px 0;background:var(--card);border:none;font-weight:600;color:var(--ink-soft)}
+  .segbtn button.on-in{background:var(--ok-bg);color:var(--ok)}
+  .segbtn button.on-out{background:var(--red-bg);color:var(--red)}
+
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--pine-deep);color:#fff;padding:11px 20px;border-radius:9px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:50}
+  .toast.show{opacity:1}
+
+  /* ---------- staging marker ---------- */
+  body::before{content:"";position:fixed;top:0;left:0;right:0;height:4px;
+      background:repeating-linear-gradient(45deg,#B08A3E,#B08A3E 10px,#8A6E2E 10px,#8A6E2E 20px);z-index:200}
+  .stagingtag{margin-left:12px;padding:4px 11px;border-radius:99px;font-family:'Inter',system-ui,sans-serif;
+      font-size:11px;font-weight:800;letter-spacing:1.5px;color:#7A5A14;background:#F3E7C6;
+      border:1px solid #E0CC97;white-space:nowrap}
+  @media (max-width:760px){ .stagingtag{font-size:9.5px;padding:3px 8px;letter-spacing:1px} }
+
+  /* ---------- gas room checks ---------- */
+  .gaspanel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:16px}
+  .gaspanel h2{font-size:15px;font-weight:700;color:var(--pine);display:flex;align-items:center;gap:9px;margin-bottom:12px}
+  .gaspanel h2 .due{font-size:10.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;
+      padding:3px 9px;border-radius:99px;background:var(--gold-soft);color:var(--gold)}
+  .manifold{background:#232B2E;border-radius:12px;padding:14px;display:grid;
+      grid-template-columns:1fr auto 1fr;gap:12px;align-items:stretch}
+  .bank{background:#1A2124;border:1px solid #37464B;border-radius:10px;padding:10px 12px;text-align:center;
+      transition:all .25s ease}
+  .bank .bl{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:#8FB2AC;margin-bottom:7px}
+  .digital{font-family:var(--mono);font-weight:600;font-size:34px;letter-spacing:2px;background:#0B0F10;
+      border:1px solid #2C393D;border-radius:8px;color:#FF5A3C;text-shadow:0 0 10px rgba(255,90,60,.55);
+      width:100%;text-align:center;padding:7px 4px;outline:none;transition:all .25s ease}
+  .digital::placeholder{color:#4A3230;text-shadow:none}
+  .digital.ok{color:#4ADE80;text-shadow:0 0 10px rgba(74,222,128,.5)}
+  .digital.warn{color:#FBBF24;text-shadow:0 0 10px rgba(251,191,36,.5)}
+  .digital.crit{color:#FF5A3C;animation:critBlink 1s infinite}
+  @keyframes critBlink{0%,100%{opacity:1}50%{opacity:.35}}
+  .bank .bstat{font-size:11px;margin-top:7px;font-weight:700;letter-spacing:.5px}
+  .bank.inuse{border-color:#4ADE80;box-shadow:0 0 0 1px rgba(74,222,128,.35), inset 0 0 18px rgba(74,222,128,.06)}
+  .pipeline{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:6px;min-width:110px}
+  .pipeline .digital{font-size:24px;padding:6px}
+  .pipeline .bl{font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;color:#8FB2AC}
+  .bankpick{display:flex;gap:0;border:1px solid #37464B;border-radius:8px;overflow:hidden;margin-top:8px}
+  .bankpick button{flex:1;padding:7px 0;background:#1A2124;border:none;color:#8FB2AC;font-weight:700;font-size:11px;
+      letter-spacing:.8px;cursor:pointer;transition:all .2s ease}
+  .bankpick button.on{background:#4ADE80;color:#0B0F10}
+  .led{width:13px;height:13px;border-radius:50%;display:inline-block;vertical-align:-2px;margin-right:7px;
+      background:#39454A;box-shadow:inset 0 0 3px rgba(0,0,0,.6)}
+  .led.green{background:#4ADE80;box-shadow:0 0 9px rgba(74,222,128,.8);animation:ledPulse 1.8s infinite}
+  .led.amber{background:#FBBF24;box-shadow:0 0 9px rgba(251,191,36,.8);animation:ledPulse 1.2s infinite}
+  .led.red{background:#FF5A3C;box-shadow:0 0 9px rgba(255,90,60,.8);animation:critBlink .9s infinite}
+  @keyframes ledPulse{0%,100%{opacity:1}50%{opacity:.55}}
+  .stepper{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .stepper button{width:46px;height:46px;border:none;background:var(--mist);font-size:22px;font-weight:700;
+      color:var(--pine);cursor:pointer;transition:background .15s ease}
+  .stepper button:hover{background:var(--ok-bg)}
+  .stepper input{width:64px;height:46px;border:none;text-align:center;font-family:var(--mono);font-size:19px;font-weight:600}
+  .steprow{display:flex;gap:16px;flex-wrap:wrap;align-items:end}
+  .steprow .fld label{display:block;font-size:12px;color:var(--ink-soft);font-weight:600;margin-bottom:5px}
+  .bigtoggle{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);
+      border-radius:12px;cursor:pointer;transition:all .2s ease;user-select:none}
+  .bigtoggle .tsw{width:52px;height:28px;border-radius:99px;background:#CBD5D1;position:relative;transition:all .25s ease;flex-shrink:0}
+  .bigtoggle .tsw::after{content:'';position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;
+      background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);transition:all .25s ease}
+  .bigtoggle.on{border-color:var(--pine);background:var(--ok-bg)}
+  .bigtoggle.on .tsw{background:var(--pine)}
+  .bigtoggle.on .tsw::after{left:27px}
+  .deliv{display:flex;align-items:center;gap:10px;margin-top:12px;padding:11px 14px;border-radius:10px;
+      border:1.5px dashed var(--line);cursor:pointer;transition:all .2s ease;user-select:none}
+  .deliv.needed{border-color:var(--red);background:var(--red-bg);animation:attnGlow 1.7s infinite}
+  .deliv.on{border-style:solid;border-color:var(--pine);background:var(--ok-bg)}
+  .gasdone{background:var(--ok-bg);border:1px solid #BFD9D2;color:var(--pine);border-radius:10px;
+      padding:11px 15px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:9px}
+  @media (max-width:760px){
+    .manifold{grid-template-columns:1fr;gap:8px}
+    .pipeline{flex-direction:row;justify-content:space-between;min-width:0}
+    .pipeline .digital{width:auto;flex:1}
+    .digital{font-size:28px}
+  }
+
+  /* ---------- login ---------- */
+  #loginWrap{position:fixed;inset:0;background:var(--mist);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px}
+  .logincard{background:#fff;border:1px solid var(--line);border-top:4px solid var(--gold);border-radius:14px;
+             padding:34px 30px;max-width:380px;width:100%;box-shadow:0 14px 44px rgba(20,60,55,.12)}
+  .logincard img{height:64px;display:block;margin:0 auto 20px}
+  .logincard h2{font-size:17px;text-align:center;margin-bottom:18px;color:var(--pine)}
+  .logincard label{display:block;font-size:12.5px;color:var(--ink-soft);margin:12px 0 4px;font-weight:600}
+  .logincard input{width:100%;padding:12px;border:1px solid var(--line);border-radius:9px;font-size:16px}
+  .logincard .btn{width:100%;margin-top:18px;padding:13px 0;font-size:15px}
+  #loginErr{color:var(--red);font-size:13px;margin-top:10px;min-height:18px;text-align:center}
+
+  /* ---------- printable labels ---------- */
+  #printArea{display:none}
+  .labelgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;padding:6mm}
+  .label{border:1px dashed #bbb;border-radius:2mm;padding:3mm;text-align:center;
+         page-break-inside:avoid;display:flex;flex-direction:column;align-items:center;gap:1.5mm}
+  .label .ln{font-size:8pt;font-weight:600;line-height:1.15;max-height:20pt;overflow:hidden}
+  .label .lc{font-family:var(--mono);font-size:7pt}
+  .label svg{max-width:100%;height:11mm}
+  .label .qr{width:16mm;height:16mm}
+  .label .qr img,.label .qr canvas{width:16mm !important;height:16mm !important}
+  @media print{
+    body > .app, .toast, dialog{display:none !important}
+    #printArea{display:block !important}
+    @page{margin:8mm}
+  }
+
+  .note{background:var(--amber-bg);border:1px solid #EAD9B0;color:var(--exp);border-radius:9px;padding:10px 14px;font-size:13px;margin-bottom:16px}
+
+  /* ---------- mobile ---------- */
+  @media (max-width:760px){
+    body{font-size:16px}                          /* comfortable reading size */
+    .app{grid-template-columns:1fr;grid-template-rows:auto auto 1fr}
+
+    header.scanbar{flex-wrap:wrap;gap:8px;padding:8px 12px;position:sticky;top:0;z-index:20}
+    .brand img{height:42px}
+    .scanwrap{order:3;flex-basis:100%;max-width:none;padding:9px 12px}
+    #scanEcho{font-size:12px}
+    .userbox{margin-left:auto}
+    .userbox div{display:none}                    /* keep just the button */
+
+    nav{display:flex;overflow-x:auto;border-right:none;border-bottom:1px solid #EAE5DA;
+        padding:8px 8px;position:sticky;top:0;z-index:15;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+    nav::-webkit-scrollbar{display:none}
+    nav .navsec{display:none}
+    nav a{margin:0 3px;white-space:nowrap;padding:9px 13px;font-size:14px;gap:8px}
+    nav a::before{width:16px;height:16px}
+    nav a:hover{transform:none}
+    nav a.active{background:rgba(138,123,84,0.13)}
+
+    main{padding:14px 12px 90px}
+    h1{font-size:18px}
+
+    .tiles{grid-template-columns:1fr 1fr;gap:9px}
+    .tile{padding:12px 13px}
+    .tile .n{font-size:22px}
+
+    .toolrow{gap:8px}
+    .toolrow input[type=search]{flex-basis:100%;padding:11px 13px;font-size:16px}
+    .toolrow select{flex:1;padding:11px 10px;font-size:15px}
+    .toolrow input[type=number],.toolrow input[type=text]{padding:11px 12px !important;font-size:16px}
+    .toolrow input[type=text]{flex:1;min-width:120px}
+    .toolrow .btn{flex-basis:100%;padding:12px 0}
+
+    /* tables become stacked cards */
+    table,tbody,tr,td{display:block;width:100%}
+    thead{display:none}
+    table{background:none;border:none}
+    tbody tr{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:10px;padding:12px 14px}
+    tbody tr:hover{background:var(--card)}
+    tbody td{border:none;padding:3px 0;display:flex;justify-content:space-between;gap:12px;align-items:baseline;font-size:14.5px}
+    tbody td::before{content:attr(data-label);font-size:11px;letter-spacing:.7px;text-transform:uppercase;color:var(--ink-soft);flex-shrink:0}
+    tbody td[data-label=""]::before{display:none}
+    tbody td:first-child{font-size:16px;padding-bottom:6px}
+    td.qty{text-align:right}
+    td.code{font-size:12.5px}
+    .rowbtns{padding-top:10px}
+    .rowbtns button{width:100%;padding:11px 0;font-size:15px;border-radius:8px}
+
+    /* dialogs become bottom sheets */
+    dialog{width:100vw;max-width:none;margin:auto 0 0 0;border-radius:16px 16px 0 0;
+           max-height:88vh;overflow-y:auto}
+    .m-row{flex-wrap:wrap}
+    .m-row label{width:100%}
+    .m-row input,.m-row select{padding:12px;font-size:16px}   /* 16px stops iOS zoom */
+    .segbtn button{padding:13px 0;font-size:15px}
+    .m-actions{position:sticky;bottom:0;background:var(--card);padding:12px 18px 16px}
+    .btn{padding:13px 18px;font-size:15px}
+
+    .toast{bottom:14px;width:calc(100vw - 28px);text-align:center}
+  }
+  @media (max-width:400px){
+    .tiles{grid-template-columns:1fr 1fr}
+    .tile .n{font-size:20px}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="scanbar">
+    <a class="brand" href="#dashboard" onclick="goHome(event)" title="Bollin Clinic Stock Manager — home">
+      <img src="logo.png" alt="Bollin Clinic Stock Manager"></a>
+    <span class="stagingtag" title="This is the staging test site — not live clinic data">STAGING</span>
+    <div class="scanwrap" title="Netum scanner is captured anywhere in the app">
+      <span class="pulse" aria-hidden="true"></span>
+      <input id="scanInput" data-scan="1" type="text" autocomplete="off" enterkeyhint="go"
+             placeholder="Ready to scan — or tap to type a code" aria-label="Scan or type a barcode">
+      <span id="scanEcho"></span>
+    </div>
+    <div class="userbox">
+      <div id="userName"></div>
+      <button id="pwBtn" onclick="openPw()" style="display:none">Password</button>
+      <button id="outBtn" onclick="signOut()" style="display:none">Sign out</button>
+    </div>
+  </header>
+
+  <nav id="nav" aria-label="Sections">
+    <div class="navsec">Overview</div>
+    <a href="#dashboard" data-view="dashboard" class="active">Dashboard</a>
+    <div class="navsec">Trackers</div>
+    <a href="#consumables" data-view="consumables">Consumables</a>
+    <a href="#meds" data-view="meds">Medicines</a>
+    <a href="#garments" data-view="garments">Garments</a>
+    <a href="#instruments" data-view="instruments">Sterilisation</a>
+    <a href="#linen" data-view="linen">Linen</a>
+    <div class="navsec">Implants</div>
+    <a href="#implants" data-view="implants">Implant orders</a>
+    <div class="navsec">Activity</div>
+    <a href="#log" data-view="log">Transaction log</a>
+    <a href="#requests" data-view="requests">Requests</a>
+    <a href="#alerts" data-view="alerts">Alerts</a>
+    <div class="navsec">Checks</div>
+    <a href="#gas" data-view="gas">Gas room checks</a>
+    <a href="#stocktake" data-view="stocktake">Stocktake</a>
+    <a href="#labels" data-view="labels">Labels</a>
+    <a href="#values" data-view="values">Stock value</a>
+    <div class="navsec">Admin</div>
+    <a href="#stores" data-view="stores">Stores & transfers</a>
+    <a href="#obsolete" data-view="obsolete">Obsolete stock</a>
+    <a href="#assets" data-view="assets">Assets</a>
+  </nav>
+
+  <main id="main"></main>
+</div>
+
+<dialog id="moveDlg">
+  <div class="m-head" id="dlgTitle">Stock movement</div>
+  <div class="m-body">
+    <div class="itname" id="dlgName"></div>
+    <div class="itcode" id="dlgCode"></div>
+    <div class="m-row">
+      <label>Direction</label>
+      <div class="segbtn">
+        <button id="segIn"  onclick="setDir('in')">Stock in</button>
+        <button id="segOut" onclick="setDir('out')">Stock out</button>
+      </div>
+    </div>
+    <div class="m-row"><label for="dlgQty">Quantity</label><input id="dlgQty" type="number" min="1" value="1"></div>
+    <div class="m-row" id="rowBatch"><label for="dlgBatch">Batch no.</label><input id="dlgBatch" type="text" placeholder="Optional"></div>
+    <div class="m-row" id="rowExp"><label for="dlgExp">Expiry</label><input id="dlgExp" type="date"></div>
+    <div class="m-row"><label for="dlgBy">Recorded by</label><input id="dlgBy" type="text" placeholder="Your name"></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="moveDlg.close()">Cancel</button>
+    <button class="btn primary" id="dlgSave" onclick="saveMove()">Save movement</button>
+  </div>
+</dialog>
+
+<dialog id="linkDlg">
+  <div class="m-head">Unknown barcode</div>
+  <div class="m-body">
+    <div class="itcode" id="linkCode" style="margin-bottom:12px"></div>
+    <p style="font-size:13.5px;color:var(--ink-soft);margin-bottom:12px">
+      This barcode isn't linked to an item yet. Choose the item it belongs to and the link is saved for every future scan.</p>
+    <div class="m-row"><label for="linkSearch">Item</label><input id="linkSearch" type="search" placeholder="Type to search all trackers…" oninput="renderLinkList()"></div>
+    <div id="linkList" style="max-height:200px;overflow-y:auto;border:1px solid var(--line);border-radius:8px"></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="linkDlg.close()">Cancel</button>
+    <button class="btn primary" id="linkAddBtn" onclick="openAdd(linkDlg.dataset.code); linkDlg.close()">＋ Add as new item</button>
+  </div>
+</dialog>
+
+<dialog id="addDlg">
+  <div class="m-head" id="addDlgTitle">Add new item</div>
+  <div class="m-body">
+    <div class="m-row"><label for="adTracker">Tracker</label>
+      <select id="adTracker">
+        <option value="consumables">Consumables</option>
+        <option value="meds">Medicines</option>
+        <option value="garments">Garments</option>
+        <option value="linen">Linen</option>
+        <option value="instruments">Instruments</option>
+      </select></div>
+    <div class="m-row"><label for="adName">Name *</label><input id="adName" type="text" placeholder="e.g. 4-0 Vicryl"></div>
+    <div class="m-row"><label for="adCat">Category</label><select id="adCat" onchange="plusOption(this,'category')"></select></div>
+    <div class="m-row"><label for="adSup">Supplier</label><input id="adSup" type="text"></div>
+    <div class="m-row"><label for="adLoc">Location</label><select id="adLoc" onchange="plusOption(this,'location')"></select></div>
+    <div class="m-row"><label for="adCode">Code</label><input id="adCode" type="text" placeholder="Supplier / CSSD code (optional)"></div>
+    <div class="m-row"><label for="adBar">Barcode</label>
+      <input id="adBar" type="text" placeholder="Scanned or generated">
+      <button class="btn" style="padding:8px 10px" onclick="$('#adBar').value=genCode($('#adTracker').value)" title="Generate a Bollin code">Generate</button></div>
+    <div class="m-row"><label for="adUnit">Unit</label><input id="adUnit" type="text" value="Each"></div>
+    <div class="m-row"><label for="adQty">Initial qty</label><input id="adQty" type="number" min="0" value="0"></div>
+    <div class="m-row"><label for="adRo">Reorder level</label><input id="adRo" type="number" min="0" value="1"></div>
+    <div class="m-row"><label for="adCost">Unit cost £</label><input id="adCost" type="number" min="0" step="0.01" placeholder="Optional"></div>
+    <div class="m-row"><label for="adBatch">Batch / Lot</label><input id="adBatch" type="text" placeholder="Optional"></div>
+    <div class="m-row"><label for="adExp">Expiry</label><input id="adExp" type="date"></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="addDlg.close()">Cancel</button>
+    <button class="btn primary" id="addDlgSave" onclick="saveNewItem()">Add item</button>
+  </div>
+</dialog>
+
+<dialog id="impDlg">
+  <div class="m-head">New implant order</div>
+  <div class="m-body">
+    <div class="m-row"><label for="imInit">Patient initials *</label><input id="imInit" type="text" placeholder="e.g. JS" maxlength="5"></div>
+    <div class="m-row"><label for="imPat">PAT number *</label><input id="imPat" type="text" placeholder="e.g. PAT-1234"></div>
+    <div class="m-row"><label for="imSurg">Surgeon</label><input id="imSurg" type="text"></div>
+    <div class="m-row"><label for="imDate">Surgery date</label><input id="imDate" type="date"></div>
+    <div class="m-row"><label for="imDet">Implant details *</label><input id="imDet" type="text" placeholder="e.g. Mentor CPG 323 350cc"></div>
+    <div class="m-row"><label for="imQty">Quantity</label><input id="imQty" type="number" min="1" value="2"></div>
+    <div class="m-row"><label for="imRem">Remarks</label><input id="imRem" type="text" placeholder="Optional"></div>
+    <div class="m-row"><label for="imOrd">Date ordered</label><input id="imOrd" type="date"></div>
+    <div class="m-row"><label for="imBy">Ordered by</label><input id="imBy" type="text"></div>
+    <div class="m-row"><label for="imStat">Status</label>
+      <select id="imStat"><option>Pending</option><option>Ordered</option><option>Delivered</option></select></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="impDlg.close()">Cancel</button>
+    <button class="btn primary" onclick="saveImplant()">Save order</button>
+  </div>
+</dialog>
+
+<dialog id="impRecvFormDlg">
+  <div class="m-head">Receive implants</div>
+  <div class="m-body">
+    <div class="itname" id="rcvName"></div>
+    <div class="itcode" id="rcvInfo" style="margin-bottom:12px"></div>
+    <div class="m-row"><label for="rcvBy">Received by *</label><input id="rcvBy" type="text"></div>
+    <div class="m-row"><label for="rcvQty">Qty received *</label><input id="rcvQty" type="number" min="1" value="2"></div>
+    <div class="m-row"><label for="rcvLoc">Kept in *</label><input id="rcvLoc" type="text" placeholder="e.g. Implant Cupboard TH2"></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="impRecvFormDlg.close()">Cancel</button>
+    <button class="btn primary" onclick="saveReceive()">Mark delivered</button>
+  </div>
+</dialog>
+
+<dialog id="impRetDlg">
+  <div class="m-head">Return remaining implants</div>
+  <div class="m-body">
+    <div class="itname" id="retName"></div>
+    <div class="itcode" id="retInfo" style="margin-bottom:12px"></div>
+    <div class="m-row"><label for="retDet">What is returned *</label><input id="retDet" type="text" placeholder="e.g. 350cc unopened"></div>
+    <div class="m-row"><label for="retQty">Qty returned *</label><input id="retQty" type="number" min="1" value="1"></div>
+    <div class="m-row"><label for="retBy">Returned by</label><input id="retBy" type="text"></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="impRetDlg.close()">Cancel</button>
+    <button class="btn primary" onclick="saveReturn()">Record return</button>
+  </div>
+</dialog>
+
+<dialog id="impRecvDlg">
+  <div class="m-head">Receive implant delivery</div>
+  <div class="m-body">
+    <div class="itcode" id="recvCode" style="margin-bottom:12px"></div>
+    <p style="font-size:13.5px;color:var(--ink-soft);margin-bottom:12px">
+      Which order does this delivery belong to? The scanned reference is saved on the order and it's marked Delivered.</p>
+    <div id="recvList" style="max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:8px"></div>
+  </div>
+  <div class="m-actions"><button class="btn" onclick="impRecvDlg.close()">Cancel</button></div>
+</dialog>
+
+<dialog id="instDlg">
+  <div class="m-head" id="instDlgTitle">Add instrument / tray</div>
+  <div class="m-body">
+    <div class="m-row"><label for="inCode">Code *</label><input id="inCode" type="text" placeholder="CSSD / tag code" style="font-family:var(--mono)"></div>
+    <div class="m-row"><label for="inName">Name *</label><input id="inName" type="text" placeholder="e.g. Basic Plastic Tray"></div>
+    <div class="m-row"><label for="inType">Type</label>
+      <select id="inType"><option>Tray</option><option>Instrument</option></select></div>
+    <div class="m-row"><label for="inDesc">Description</label><input id="inDesc" type="text" placeholder="Optional"></div>
+    <div class="m-row"><label for="inQty">Instruments in tray</label><input id="inQty" type="number" min="1" value="1"></div>
+    <div class="m-row"><label for="inExp">Sterile expiry</label><input id="inExp" type="date" title="Leave empty if unknown — set automatically at next sterilisation"></div>
+    <div class="m-row"><label for="inNotes">Notes</label><input id="inNotes" type="text"></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="instDlg.close()">Cancel</button>
+    <button class="btn primary" id="instDlgSave" onclick="saveInstrument()">Add to register</button>
+  </div>
+</dialog>
+
+<dialog id="assetDlg">
+  <div class="m-head" id="assetDlgTitle">Add asset</div>
+  <div class="m-body">
+    <div class="m-row"><label for="asName">Name *</label><input id="asName" type="text" placeholder="e.g. Autoclave 2"></div>
+    <div class="m-row"><label for="asSerial">Serial number</label><input id="asSerial" type="text" style="font-family:var(--mono)"></div>
+    <div class="m-row"><label for="asFunc">Function</label><input id="asFunc" type="text" placeholder="e.g. Steam sterilisation"></div>
+    <div class="m-row"><label for="asSup">Supplier</label><input id="asSup" type="text"></div>
+    <div class="m-row"><label for="asPhone">Supplier contact</label><input id="asPhone" type="tel" placeholder="Phone number"></div>
+    <div class="m-row"><label for="asLoc">Location</label><input id="asLoc" type="text" placeholder="e.g. Theatre 2"></div>
+    <div class="m-row"><label for="asLast">Last maintenance</label><input id="asLast" type="date"></div>
+    <div class="m-row"><label for="asNext">Next maintenance due</label><input id="asNext" type="date"></div>
+    <div class="m-row"><label for="asStatus">Status</label>
+      <select id="asStatus">
+        <option>Working</option><option>Out for Maintenance</option><option>Under Repair</option>
+        <option>Awaiting Parts</option><option>Scheduled for Service</option>
+        <option>Faulty — In Use</option><option>In Calibration</option>
+        <option>Standby / Backup</option><option>Decommissioned</option>
+      </select></div>
+    <div class="m-row"><label for="asNotes">Notes</label><input id="asNotes" type="text"></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="assetDlg.close()">Cancel</button>
+    <button class="btn primary" id="assetDlgSave" onclick="saveAsset()">Add asset</button>
+  </div>
+</dialog>
+
+<div id="loginWrap" style="display:none">
+  <div class="logincard">
+    <img src="logo.png" alt="Bollin Clinic Stock Manager">
+    <h2>Sign in</h2>
+    <label for="liUser">Username</label>
+    <input id="liUser" type="text" autocomplete="username" autocapitalize="none">
+    <label for="liPass">Password</label>
+    <input id="liPass" type="password" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn primary" onclick="doLogin()">Sign in</button>
+    <div id="loginErr"></div>
+    <div style="text-align:center;margin-top:14px;font-size:12px;color:var(--ink-soft)">
+      Accounts are created by the clinic administrator.<br>You can change your password after signing in.</div>
+  </div>
+</div>
+
+<dialog id="pwDlg">
+  <div class="m-head">Change password</div>
+  <div class="m-body">
+    <div class="m-row"><label for="pwOld">Current</label><input id="pwOld" type="password"></div>
+    <div class="m-row"><label for="pwNew">New (6+ chars)</label><input id="pwNew" type="password"></div>
+    <div class="m-row"><label for="pwNew2">Repeat new</label><input id="pwNew2" type="password"></div>
+  </div>
+  <div class="m-actions">
+    <button class="btn" onclick="pwDlg.close()">Cancel</button>
+    <button class="btn primary" onclick="doChangePassword()">Change password</button>
+  </div>
+</dialog>
+
+<div id="printArea"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =============================================================
+   CONFIG — paste your Apps Script Web App URL here (ends /exec).
+   Leave empty to run in demo mode with sample data.
+   ============================================================= */
+const CONFIG = {
+  // ===== STAGING BUILD — paste the STAGING Apps Script /exec URL below =====
+  // (Must be the Bollin_Inventory_STAGING sheet, NOT production.)
+  API_URL: "PASTE_STAGING_EXEC_URL_HERE"
+};
+const TRACKER_TAB = {consumables:'Consumables',meds:'Meds',garments:'Garments',instruments:'Instruments',linen:'Linen'};
+
+/* =============================================================
+   DEMO DATA — real rows sampled from the Bollin trackers so the
+   app is testable today. Replaced by Graph reads once connected.
+   ============================================================= */
+const state = {
+  items: [
+    // ---- consumables (tracker:'consumables')
+    {tracker:'consumables',cat:'Theatre',name:'0 Stratafix',supplier:'Ethicon',code:'SXPP1A406',barcode:'',expiry:'2026-10-31',qty:1,unit:'Box',reorder:1,loc:'Stock Room 1',cost:null},
+    {tracker:'consumables',cat:'Theatre',name:'100cm Extension Connect-A-Set 3',supplier:'Vygon',code:'70141.1',barcode:'',expiry:null,qty:7,unit:'Each',reorder:4,loc:'Stock Room 2',cost:null},
+    {tracker:'consumables',cat:'Theatre',name:'3-Way Giving Set',supplier:'AMS',code:'7320BL',barcode:'',expiry:'2030-10-06',qty:21,unit:'Each',reorder:10,loc:'Stock Room 2',cost:null},
+    {tracker:'consumables',cat:'Theatre',name:'5-0 Prolene',supplier:'Ethicon',code:'8934H',barcode:'',expiry:'2030-10-31',qty:0,unit:'Box',reorder:1,loc:'Stock Room 1',cost:null},
+    {tracker:'consumables',cat:'Theatre',name:'Activon Tube',supplier:'Mediq',code:'CR4493',barcode:'',expiry:'2028-12-27',qty:7,unit:'Each',reorder:5,loc:'Stock Room 1',cost:null},
+    {tracker:'consumables',cat:'Ward',name:'Anti-Embolism Stocking Medium',supplier:'Lipoelastic',code:'LIPO0101-M-W',barcode:'',expiry:'2032-10-24',qty:10,unit:'Box',reorder:4,loc:'Stock Room 1',cost:null},
+    {tracker:'consumables',cat:'Ward',name:'Aquacel Ag+ Extra 5x5cm',supplier:'Alliance',code:'413566',barcode:'',expiry:'2028-11-26',qty:2,unit:'Each',reorder:2,loc:'Stock Room 1',cost:null},
+    {tracker:'consumables',cat:'Theatre',name:'Adhesive Op Towel 90 x 75cm',supplier:'Mediq',code:'906677',barcode:'',expiry:'2030-10-28',qty:34,unit:'Each',reorder:20,loc:'Stock Room 1',cost:null},
+    {tracker:'consumables',cat:'Theatre',name:'Chloraprep Stick Clear 3ml',supplier:'Mediq',code:'CHP3ML',barcode:'',expiry:'2026-08-30',qty:16,unit:'Each',reorder:6,loc:'COSHH Cupboard',cost:null},
+    // ---- medicines
+    {tracker:'meds',cat:'Emergency',name:'Adrenaline (Epinephrine) 1:10,000 injection',supplier:'',code:'',barcode:'',expiry:null,qty:9,unit:'Each',reorder:5,loc:'Cabinet 4-TH2',cost:null,batch:''},
+    {tracker:'meds',cat:'Emergency',name:'Amiodarone 30mg/ml injection 10 mls',supplier:'',code:'',barcode:'',expiry:null,qty:5,unit:'Each',reorder:5,loc:'Cabinet 4-TH2',cost:null,batch:''},
+    {tracker:'meds',cat:'',name:'Atracurium Besilate 50mg in 5ml Amps',supplier:'',code:'',barcode:'',expiry:null,qty:5,unit:'Each',reorder:2,loc:'Theatre 2 Fridge',cost:null,batch:''},
+    {tracker:'meds',cat:'Emergency',name:'Bupivacaine 0.25% injection 10ml',supplier:'',code:'',barcode:'',expiry:null,qty:90,unit:'Each',reorder:100,loc:'Cabinet 13-TH2',cost:null,batch:''},
+    {tracker:'meds',cat:'',name:'Cefuroxime 1.5g powder for injection',supplier:'',code:'',barcode:'',expiry:null,qty:180,unit:'Each',reorder:60,loc:'Cabinet 4-TH2',cost:null,batch:''},
+    {tracker:'meds',cat:'',name:'Botox Powder for Solution for Injection',supplier:'',code:'',barcode:'',expiry:'2026-09-15',qty:4,unit:'Each',reorder:2,loc:'Theatre 2 Fridge',cost:null,batch:''},
+    // ---- garments
+    {tracker:'garments',cat:'Abdo Garment',name:'VH Variant Abdo Garment L Black',supplier:'',code:'LIP00003-L-B',barcode:'LIP00003-L-B',expiry:null,qty:5,unit:'Each',reorder:2,loc:'Garment Store',cost:null},
+    {tracker:'garments',cat:'Abdo Garment',name:'VF Variant Abdo Garment M Black',supplier:'',code:'LIP00010-M-B',barcode:'LIP00010-M-B',expiry:null,qty:5,unit:'Each',reorder:2,loc:'Garment Store',cost:null},
+    {tracker:'garments',cat:'Binder',name:'KP Special Binder M White',supplier:'',code:'LIP00092-M-W',barcode:'LIP00092-M-W',expiry:null,qty:6,unit:'Each',reorder:2,loc:'Garment Store',cost:null},
+    {tracker:'garments',cat:'Bra',name:'PI Elite Bra 34BC Black',supplier:'',code:'LIP05003-34BC-B',barcode:'LIP05003-34BC-B',expiry:null,qty:4,unit:'Each',reorder:2,loc:'Garment Store',cost:null},
+    // ---- instruments (CSSD codes)
+    {tracker:'instruments',cat:'Tray',name:'Basic Plastic Tray',supplier:'',code:'SET03488-006',barcode:'SET03488-006',expiry:null,qty:1,unit:'Tray',reorder:0,loc:'Bollin',cost:null,status:'At Bollin'},
+    {tracker:'instruments',cat:'Instrument',name:'Light Handle',supplier:'',code:'SIN07949-031',barcode:'SIN07949-031',expiry:null,qty:1,unit:'Each',reorder:0,loc:'Bollin',cost:null,status:'At Bollin'},
+    {tracker:'instruments',cat:'Instrument',name:'Freeman Areola Marker',supplier:'',code:'SIN08457',barcode:'SIN08457',expiry:null,qty:1,unit:'Each',reorder:0,loc:'Bollin',cost:null,status:'At Bollin'},
+    {tracker:'instruments',cat:'Instrument',name:'LIPO Handle',supplier:'',code:'SIN08438-06',barcode:'SIN08438-06',expiry:null,qty:1,unit:'Each',reorder:0,loc:'Bollin',cost:null,status:'At Countess'},
+    // ---- linen
+    {tracker:'linen',cat:'Theatre Linen',name:'Theatre Drape Green Large',supplier:'',code:'BC-LIN-001',barcode:'BC-LIN-001',expiry:null,qty:24,unit:'Each',reorder:10,loc:'Linen Cupboard',cost:8.50}
+  ],
+  implantsDemo: true,
+  log: [],          // {ts,dir,name,code,qty,by,tracker,batch,expiry}
+  requests: [],     // {ts,by,item,qty,status}
+  barcodeLinks: {}  // scanned barcode -> item index (persisted server-side in v2)
+};
+
+const TRACKER_LABEL = {consumables:'Consumables',meds:'Medicines',garments:'Garments',instruments:'Sterilisation',linen:'Linen'};
+let currentView = 'dashboard';
+let dlgItem = null, dlgDir = 'out';
+
+/* ---------------- helpers ---------------- */
+const $ = s => document.querySelector(s);
+const fmt = n => n==null?'—':n;
+function daysTo(d){ if(!d) return null; return Math.round((new Date(d) - new Date())/86400000); }
+function statusOf(it){
+  if(it.tracker==='instruments') return it.status==='At Countess' ? {t:'At Countess',c:'b-exp'} : {t:'At Bollin',c:'b-ok'};
+  if(it.qty===0) return {t:'Out of stock',c:'b-out'};
+  if(it.qty<=it.reorder) return {t:'Low stock',c:'b-low'};
+  return {t:'OK',c:'b-ok'};
+}
+function expBadge(it){
+  const d = daysTo(it.expiry);
+  if(d==null) return '';
+  if(d<0)   return '<span class="badge b-out">Expired</span>';
+  if(d<=90) return `<span class="badge b-exp">${d}d left</span>`;
+  return '';
+}
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); }
+
+/* ---------------- scanner capture (Netum keyboard wedge) ----------------
+   Scanners type fast (<35ms between keys) and finish with Enter.
+   We buffer keys globally; a fast burst ending in Enter = a scan.       */
+let buf='', lastKey=0;
+document.addEventListener('keydown', e => {
+  if(e.target.id === 'scanInput') return;          // handled by its own listener
+  if(e.target.matches('input,select,textarea')) {
+    // typing in a form field: still allow scans — bursts are distinguishable,
+    // but keep it simple in v1: ignore while a dialog is open
+    if($('#moveDlg').open || $('#linkDlg').open || $('#addDlg').open ||
+       $('#impDlg').open || $('#impRetDlg').open || $('#impRecvFormDlg').open ||
+       $('#instDlg').open || $('#assetDlg').open) return;
+  }
+  const now = Date.now();
+  if(now - lastKey > 80) buf='';
+  lastKey = now;
+  if(e.key === 'Enter'){
+    if(buf.length >= 4) handleScan(buf);
+    buf='';
+  } else if(e.key.length === 1){
+    buf += e.key;
+  }
+});
+// tappable scan field (mobile / manual entry)
+document.getElementById('scanInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter'){
+    const code = e.target.value.trim();
+    e.target.value = '';
+    if(code.length >= 2) handleScan(code);
+  }
+});
+function handleScan(code){
+  $('#scanEcho').textContent = 'Scanned: ' + code;
+  // receiving an implant delivery?
+  if(currentView==='implants'){ implantScan(code); return; }
+  // sterilisation view: dispatch / return flow
+  if(currentView==='instruments'){ sterilScan(code); return; }
+  // 1. direct match on barcode or code
+  let idx = state.items.findIndex(it => it.barcode===code || it.code===code);
+  // 2. learned link
+  if(idx<0 && code in state.barcodeLinks) idx = state.barcodeLinks[code];
+  if(idx>=0){
+    const it = state.items[idx];
+    // during a stocktake, a scan counts the item instead of moving stock
+    if(currentView==='stocktake' && it.tracker===stk.tracker &&
+       (!stk.store || it.loc===stk.store)){ bumpCount(it); return; }
+    if(it.tracker==='instruments'){ sterilScan(code); return; }
+    openMove(it); return;
+  }
+  // 3. unknown -> link dialog
+  $('#linkCode').textContent = code;
+  $('#linkAddBtn').style.display = can('add') ? '' : 'none';
+  linkDlg.returnValue=''; linkDlg.dataset.code=code;
+  $('#linkSearch').value=''; renderLinkList();
+  linkDlg.showModal();
+}
+function renderLinkList(){
+  const q = $('#linkSearch').value.toLowerCase();
+  const rows = state.items
+    .map((it,i)=>({it,i}))
+    .filter(x => !q || x.it.name.toLowerCase().includes(q) || (x.it.code||'').toLowerCase().includes(q))
+    .slice(0,30)
+    .map(x => `<div style="padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer" onclick="linkBarcode(${x.i})">
+        <strong>${x.it.name}</strong>
+        <span style="font-family:var(--mono);font-size:11px;color:var(--ink-soft)"> ${x.it.code||''} · ${TRACKER_LABEL[x.it.tracker]}</span></div>`)
+    .join('');
+  $('#linkList').innerHTML = rows || '<div style="padding:12px;color:var(--ink-soft)">No matches.</div>';
+}
+function linkBarcode(i){
+  const code = linkDlg.dataset.code;
+  state.barcodeLinks[code] = i;
+  state.items[i].barcode = state.items[i].barcode || code;
+  linkDlg.close();
+  toast('Barcode linked to ' + state.items[i].name);
+  if(LIVE) api({action:'link', barcode:code, tracker:TRACKER_TAB[state.items[i].tracker],
+                code: state.items[i].code || code}).catch(e=>toast('Link not saved — '+e.message));
+  openMove(state.items[i]);
+}
+
+/* ---------------- stock movement ---------------- */
+function openMove(it){
+  dlgItem = it; setDir('out');
+  $('#dlgName').textContent = it.name;
+  $('#dlgCode').textContent = (it.code||'no code') + ' · ' + TRACKER_LABEL[it.tracker] + ' · ' + it.loc + ' · current: ' + it.qty + ' ' + it.unit;
+  $('#dlgQty').value = 1;
+  $('#dlgBatch').value=''; $('#dlgExp').value='';
+  $('#dlgBy').value = myName || '';
+  const meds = it.tracker==='meds' || it.tracker==='consumables';
+  $('#rowBatch').style.display = meds?'flex':'none';
+  $('#rowExp').style.display   = meds?'flex':'none';
+  moveDlg.showModal();
+  $('#dlgQty').select();
+}
+function setDir(d){
+  dlgDir=d;
+  $('#segIn').className  = d==='in' ? 'on-in' :'';
+  $('#segOut').className = d==='out'? 'on-out':'';
+  const isInstr = dlgItem && dlgItem.tracker==='instruments';
+  $('#dlgTitle').textContent = isInstr ? (d==='out'?'Dispatch to Countess':'Return to Bollin')
+                                       : (d==='in'?'Stock in':'Stock out');
+}
+async function saveMove(){
+  const q = Math.max(1, parseInt($('#dlgQty').value||'1',10));
+  const by = ($('#dlgBy').value.trim() || myName || 'Unknown');
+  if(!myName && $('#dlgBy').value.trim()){ myName=$('#dlgBy').value.trim();
+    try{localStorage.setItem('bollin_name',myName);}catch(e){} paintName(); }
+  const prevQty = dlgItem.qty, prevStatus = dlgItem.status;
+
+  if(dlgItem.tracker==='instruments'){
+    dlgItem.status = dlgDir==='out' ? 'At Countess' : 'At Bollin';
+  } else {
+    if(dlgDir==='out' && q>dlgItem.qty){ toast('Only '+dlgItem.qty+' in stock'); return; }
+    dlgItem.qty += (dlgDir==='in'? q : -q);
+    if(dlgDir==='in'){
+      if($('#dlgExp').value) dlgItem.expiry = $('#dlgExp').value;
+      if($('#dlgBatch').value) dlgItem.batch = $('#dlgBatch').value;
+    }
+  }
+  state.log.unshift({ts:new Date().toISOString(), dir:dlgDir, name:dlgItem.name, code:dlgItem.code,
+                     qty:q, by, tracker:dlgItem.tracker, batch:$('#dlgBatch').value, expiry:$('#dlgExp').value});
+  moveDlg.close();
+  toast((dlgDir==='in'?'+':'−')+q+' '+dlgItem.unit+' — '+dlgItem.name);
+  render();
+
+  if(LIVE){
+    try{
+      await api({action:'move', tracker:TRACKER_TAB[dlgItem.tracker],
+                 row: dlgItem._row || null,
+                 code: dlgItem.code || dlgItem.barcode || dlgItem.name,
+                 dir:dlgDir, qty:q, by,
+                 batch:$('#dlgBatch') ? $('#dlgBatch').value : '', expiry:$('#dlgExp') ? $('#dlgExp').value : ''});
+    }catch(err){
+      dlgItem.qty = prevQty; dlgItem.status = prevStatus; state.log.shift();
+      toast('Not saved — '+err.message); render();
+    }
+  }
+}
+
+/* ---------------- views ---------------- */
+function tableFor(items, opts={}){
+  const showExp = opts.expiry!==false;
+  const head = `<thead><tr>
+      <th>Item</th><th>Code</th><th>Category</th><th>Location</th>
+      ${showExp?'<th>Expiry</th>':''}<th class="qty">Qty</th><th>Status</th><th></th></tr></thead>`;
+  const rows = items.map(it=>{
+    const s = statusOf(it);
+    return `<tr>
+      <td data-label=""><strong>${it.name}</strong></td>
+      <td class="code" data-label="Code">${it.code||'—'}</td>
+      <td data-label="Category">${it.cat||'—'}</td>
+      <td data-label="Location">${it.loc||'—'}</td>
+      ${showExp?`<td data-label="Expiry">${it.expiry? new Date(it.expiry).toLocaleDateString('en-GB') : '—'} ${expBadge(it)}</td>`:''}
+      <td class="qty" data-label="Qty">${it.tracker==='instruments'?'—':it.qty+' '+it.unit}</td>
+      <td data-label="Status"><span class="badge ${s.c}">${s.t}</span></td>
+      <td class="rowbtns" data-label=""><button onclick='openMove(state.items[${state.items.indexOf(it)}])'>Move</button>
+        ${can('edit')?`<button onclick='openEdit(${state.items.indexOf(it)})'>Edit</button>`:''}
+        ${can('obsolete')&&it.tracker!=='instruments'?`<button onclick='markObsolete(${state.items.indexOf(it)})' title="Move to obsolete stock" style="color:var(--ink-soft)">Obsolete</button>`:''}</td>
+    </tr>`;
+  }).join('');
+  return `<table>${head}<tbody>${rows||'<tr><td colspan="8" style="color:var(--ink-soft)">Nothing matches.</td></tr>'}</tbody></table>`;
+}
+
+function trackerView(key){
+  const all = state.items.filter(i=>i.tracker===key && !i.obsolete);
+  const stores = [...new Set(all.map(i=>i.loc).filter(Boolean))].sort();
+  const cats   = [...new Set(all.map(i=>i.cat).filter(Boolean))].sort();
+  const q  = (window._q ||'').toLowerCase();
+  const st = window._store||'', ct = window._cat||'';
+  const items = all.filter(i =>
+      (!q || i.name.toLowerCase().includes(q) || (i.code||'').toLowerCase().includes(q)) &&
+      (!st || i.loc===st) && (!ct || i.cat===ct));
+  return `
+    <h1>${TRACKER_LABEL[key]}</h1>
+    <div class="sub">${all.length} items · scan any barcode, or use Move</div>
+    <div class="toolrow">
+      <input type="search" placeholder="Search name or code…" value="${window._q||''}"
+             oninput="window._q=this.value;refreshTrackerTable()">
+      <select onchange="window._store=this.value;render()">
+        <option value="">All stores</option>
+        ${stores.map(s=>`<option ${s===st?'selected':''}>${s}</option>`).join('')}
+      </select>
+      <select onchange="window._cat=this.value;render()">
+        <option value="">All categories</option>
+        ${cats.map(c=>`<option ${c===ct?'selected':''}>${c}</option>`).join('')}
+      </select>
+      ${can('add')?`<button class="btn" onclick="openAdd('')">＋ Add item</button>`:''}
+    </div>
+    <div id="tblWrap">${tableFor(items,{expiry: key!=='garments'})}</div>`;
+}
+function refreshTrackerTable(){
+  const wrap = document.getElementById('tblWrap');
+  if(!wrap || !(currentView in TRACKER_TAB)) return;
+  const key = currentView;
+  const q  = (window._q ||'').toLowerCase();
+  const st = window._store||'', ct = window._cat||'';
+  const items = state.items.filter(i => i.tracker===key && !i.obsolete &&
+      (!q || i.name.toLowerCase().includes(q) || (i.code||'').toLowerCase().includes(q)) &&
+      (!st || i.loc===st) && (!ct || i.cat===ct));
+  wrap.innerHTML = tableFor(items,{expiry: key!=='garments'});
+}
+
+function dashboardView(){
+  const stock = state.items.filter(i=>i.tracker!=='instruments' && !i.obsolete);
+  const low = stock.filter(i=>i.qty>0 && i.qty<=i.reorder);
+  const out = stock.filter(i=>i.qty===0);
+  const exp = stock.filter(i=>{const d=daysTo(i.expiry);return d!=null && d<=90;});
+  const away = state.dispatch.filter(d=>d.status!=='Returned');
+  const val = stock.reduce((s,i)=> s + (i.cost!=null ? i.cost*i.qty : 0), 0);
+  const costed = stock.filter(i=>i.cost!=null).length;
+  const pend = state.requests.filter(r=>r.status==='Requested').length;
+  const impOrdered = state.implants.filter(i=>i.status==='Ordered'||i.status==='Pending').length;
+  const impAwaitRet = state.implants.filter(i=>i.status==='Delivered' && !i.returnDetails).length;
+  return `
+    <h1>Dashboard</h1>
+    <div class="sub">Live position across all five trackers</div>
+    ${LIVE ? '' : '<div class="note">Demo mode — sample data only. Paste your Apps Script URL into CONFIG.API_URL to connect the live Google Sheet.</div>'}
+    <div class="tiles">
+      <div class="tile warn ${low.length?'attn':''}" onclick="nav('dash-low')"><span class="ic">📉</span><div class="n">${low.length}</div><div class="l">Low stock items</div></div>
+      <div class="tile bad ${out.length?'attn':''}"  onclick="nav('dash-out')"><span class="ic">🚫</span><div class="n">${out.length}</div><div class="l">Out of stock</div></div>
+      <div class="tile exp ${exp.length?'attn':''}"  onclick="nav('dash-exp')"><span class="ic">⏳</span><div class="n">${exp.length}</div><div class="l">Expiring ≤ 90 days</div></div>
+      <div class="tile"      onclick="nav('instruments')"><span class="ic">🔁</span><div class="n">${away.length}</div><div class="l">Lines out at CSSD</div></div>
+      <div class="tile warn ${instExpiring().length?'attn':''}" onclick="sterTab='onhand';nav('instruments')"><span class="ic">🧰</span><div class="n">${instExpiring().length}</div><div class="l">Instruments expiring ≤ 60 days</div></div>
+      ${can('values')?`<div class="tile" onclick="nav('values')"><span class="ic">💷</span><div class="n">£${val.toFixed(0)}</div><div class="l">Stock value (${costed} of ${stock.length} items costed)</div></div>`:''}
+      <div class="tile ${pend?'attn':''}" onclick="nav('requests')"><span class="ic">📨</span><div class="n">${pend}</div><div class="l">Requests awaiting response</div></div>
+      ${can('implants')?`<div class="tile ${(impOrdered+impAwaitRet)?'attn':''}" onclick="nav('implants')"><span class="ic">⚕️</span><div class="n">${impOrdered}</div><div class="l">Implants ordered · ${impAwaitRet} awaiting return</div></div>`:''}
+    </div>
+    <h1 style="font-size:16px">Needs attention</h1>
+    <div class="sub">Low, out of stock and short-dated items across every tracker</div>
+    ${tableFor([...out,...low,...exp.filter(i=>!out.includes(i)&&!low.includes(i))])}`;
+}
+
+function listView(title, filter){
+  return `<h1>${title}</h1><div class="sub">&nbsp;</div>` + tableFor(state.items.filter(filter));
+}
+
+function actBadge(a){
+  const cls = /in$|received|added|registered/i.test(a)?'b-ok'
+    : /out$|dispatched/i.test(a)?'b-out'
+    : /used|stocktake/i.test(a)?'b-low' : 'b-exp';
+  return `<span class="badge ${cls}">${a||'—'}</span>`;
+}
+function logView(){
+  const rows = state.log.map(l=>`<tr>
+      <td data-label=""><strong>${l.name||'—'}</strong></td>
+      <td data-label="Activity">${actBadge(l.activity)}</td>
+      <td data-label="When">${l.ts?new Date(l.ts).toLocaleString('en-GB'):''}</td>
+      <td class="code" data-label="Code">${l.code||'—'}</td>
+      <td class="qty" data-label="Qty">${l.qty||'—'}</td>
+      <td data-label="By">${l.by||'—'}</td>
+      <td data-label="Tracker">${l.tracker||'—'}</td>
+      <td data-label="Details">${l.note||'—'}</td></tr>`).join('');
+  return `<h1>Activity log</h1>
+    <div class="sub">Every action across the system — stock, sterilisation, implants, requests, stocktakes. A summary email is sent automatically at midnight each night.</div>
+    ${can('reports')?`
+    <div class="toolrow" style="align-items:center">
+      <span style="font-size:13px;color:var(--ink-soft)">Report:</span>
+      <select id="txRange" onchange="$('#txCustom').style.display=this.value==='custom'?'flex':'none'">
+        <option value="day">Today</option><option value="week">This week</option>
+        <option value="month" selected>This month</option><option value="custom">Custom dates</option>
+      </select>
+      <span id="txCustom" style="display:none;gap:6px;align-items:center">
+        <input id="txFrom" type="date" style="padding:8px;border:1px solid var(--line);border-radius:8px">
+        <span>to</span>
+        <input id="txTo" type="date" style="padding:8px;border:1px solid var(--line);border-radius:8px">
+      </span>
+      <button class="btn primary" onclick="txReportPDF()">Download PDF</button>
+    </div>`:''}
+    <table><thead><tr><th>Item</th><th>Activity</th><th>When</th><th>Code</th><th class="qty">Qty</th><th>By</th><th>Tracker</th><th>Details</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="8" style="color:var(--ink-soft)">No activity yet.</td></tr>'}</tbody></table>`;
+}
+
+function resolveRange(prefix){
+  const range = $('#'+prefix+'Range').value;
+  const today = new Date(); today.setHours(0,0,0,0);
+  let from, to, label;
+  if(range==='day'){ from=new Date(today); to=new Date(today); label='Today '+today.toLocaleDateString('en-GB'); }
+  else if(range==='week'){
+    from=new Date(today); from.setDate(from.getDate()-((from.getDay()+6)%7));
+    to=new Date(from); to.setDate(to.getDate()+6);
+    label=from.toLocaleDateString('en-GB')+' - '+to.toLocaleDateString('en-GB');
+  } else if(range==='month'){
+    from=new Date(today.getFullYear(),today.getMonth(),1);
+    to=new Date(today.getFullYear(),today.getMonth()+1,0);
+    label=from.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+  } else {
+    if(!$('#'+prefix+'From').value || !$('#'+prefix+'To').value){ toast('Pick both custom dates'); return null; }
+    from=new Date($('#'+prefix+'From').value); to=new Date($('#'+prefix+'To').value);
+    label=from.toLocaleDateString('en-GB')+' - '+to.toLocaleDateString('en-GB');
+  }
+  to.setHours(23,59,59);
+  return {from, to, label};
+}
+
+async function txReportPDF(){
+  const r = resolveRange('tx');
+  if(!r) return;
+  let rows;
+  if(LIVE){
+    try{
+      const data = await api({action:'getTransactions', from:r.from.toISOString(), to:r.to.toISOString()});
+      rows = data.transactions.map(t=>({ts:t.Timestamp,
+        activity:t.Activity||(t.Direction==='in'?'Stock in':t.Direction==='out'?'Stock out':''),
+        tracker:t.Tracker||'', name:t.Name||'', code:t.Code||'', qty:t.Qty||'',
+        by:t.By||'', note:t.Note||''}));
+    }catch(err){ toast(err.message); return; }
+  } else {
+    rows = state.log.filter(l=>{ const d=l.ts?new Date(l.ts):null; return d&&d>=r.from&&d<=r.to; });
+  }
+  if(!rows.length){ toast('No activity in that period'); return; }
+  rows.sort((a,b)=>new Date(a.ts)-new Date(b.ts));
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+  try{
+    const blob = await fetch('logo.png').then(x=>x.blob());
+    const dataUrl = await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(blob);});
+    const img = await new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.src=dataUrl;});
+    doc.addImage(dataUrl,'PNG',10,8,14*(img.width/img.height),14);
+  }catch(e){}
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(43,97,104);
+  doc.text('Activity Log Report', W-10, 13, {align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90,90,90);
+  doc.text(r.label + '  ·  ' + rows.length + ' event(s)  ·  Printed ' +
+    new Date().toLocaleString('en-GB') + (myName?' by '+myName:''), W-10, 18.5, {align:'right'});
+  doc.setDrawColor(176,138,62); doc.setLineWidth(0.8); doc.line(10, 22, W-10, 22);
+
+  doc.autoTable({
+    startY: 25, margin:{left:10,right:10},
+    head: [['Date','Time','Activity','Tracker','Item','Code','Qty','By','Details']],
+    body: rows.map(l=>{ const d=new Date(l.ts); return [
+      d.toLocaleDateString('en-GB'), d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),
+      l.activity, l.tracker, l.name, l.code, l.qty, l.by, l.note ];}),
+    theme:'grid',
+    styles:{font:'helvetica',fontSize:7.5,cellPadding:1.6,lineColor:[185,201,197],lineWidth:0.15,
+            textColor:[23,37,31],overflow:'linebreak',valign:'middle'},
+    headStyles:{fillColor:[43,97,104],textColor:255,fontSize:7.5,fontStyle:'bold'},
+    alternateRowStyles:{fillColor:[242,247,246]},
+    columnStyles:{0:{cellWidth:18},1:{cellWidth:12},2:{cellWidth:28},3:{cellWidth:20},
+      4:{cellWidth:52},5:{cellWidth:24},6:{cellWidth:10,halign:'center'},7:{cellWidth:22}},
+    didDrawPage: d => {
+      doc.setFontSize(7.5); doc.setTextColor(140,140,140);
+      doc.text('Bollin Clinic Stock Manager — Activity ' + r.label, 10, doc.internal.pageSize.getHeight()-6);
+      doc.text('Page ' + d.pageNumber, W-10, doc.internal.pageSize.getHeight()-6, {align:'right'});
+    }
+  });
+  doc.save('Activity_Report_' + r.label.replace(/[^0-9A-Za-z]+/g,'_') + '.pdf');
+  toast('PDF downloaded');
+}
+
+function requestsView(){
+  const RESP_STATUSES = ['Ordered','Awaiting Supplier Response','Back order','Out of stock','Received','In stock','Other'];
+  const isDone = s => s==='Received' || s==='In stock';
+  const open = state.requests.map((r,ix)=>({r,ix})).filter(x=>!isDone(x.r.status));
+  const done = state.requests.map((r,ix)=>({r,ix})).filter(x=>isDone(x.r.status));
+
+  const openRows = open.map(({r,ix})=>`<tr>
+      <td data-label=""><strong>${r.item}</strong>${r.size?' <span class="code" style="font-size:12px">('+r.size+')</span>':''}</td>
+      <td data-label="Requested">${r.ts?new Date(r.ts).toLocaleDateString('en-GB'):''} · ${r.by}</td>
+      <td class="qty" data-label="Qty">${r.qty}</td>
+      <td data-label="Status"><span class="badge ${r.status==='Requested'?'b-low':'b-exp'}">${r.status}</span>
+        ${r.handledBy?'<div style="font-size:11px;color:var(--ink-soft)">'+r.handledBy+(r.responded?' · '+new Date(r.responded).toLocaleDateString('en-GB'):'')+'</div>':''}</td>
+      <td data-label="Remarks">${r.remarks||'—'}</td>
+      <td class="rowbtns" data-label="">
+        ${can('respond')?`<select onchange="respondRequest(${ix}, this.value)" style="padding:6px;border:1px solid var(--line);border-radius:6px;font-size:12px">
+          <option value="">Respond…</option>
+          ${RESP_STATUSES.map(s=>`<option>${s}</option>`).join('')}
+        </select>`:'—'}</td></tr>`).join('');
+
+  const doneRows = done.map(({r})=>`<tr>
+      <td data-label=""><strong>${r.item}</strong>${r.size?' ('+r.size+')':''}</td>
+      <td data-label="Requested">${r.ts?new Date(r.ts).toLocaleDateString('en-GB'):''} · ${r.by}</td>
+      <td class="qty" data-label="Qty">${r.qty}</td>
+      <td data-label="Outcome"><span class="badge b-ok">${r.status}</span></td>
+      <td data-label="Handled by">${r.handledBy||'—'}${r.responded?' · '+new Date(r.responded).toLocaleDateString('en-GB'):''}</td>
+      <td data-label="Remarks">${r.remarks||'—'}</td></tr>`).join('');
+
+  return `<h1>Requests</h1>
+    <div class="sub">Surgeons and assistants request items we don't stock; the stock team responds below. Date requested is recorded automatically.</div>
+    <div class="toolrow">
+      <input id="reqBy" type="text" placeholder="Your name" value="${myName||''}" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px">
+      <input id="reqItem" type="text" placeholder="Details of item requested" style="flex:2;min-width:180px;padding:8px 10px;border:1px solid var(--line);border-radius:8px">
+      <input id="reqQty" type="number" min="1" value="1" title="Quantity" style="width:80px;padding:8px 10px;border:1px solid var(--line);border-radius:8px">
+      <input id="reqSize" type="text" placeholder="Size (if applicable)" style="width:140px;padding:8px 10px;border:1px solid var(--line);border-radius:8px">
+      <button class="btn primary" onclick="addRequest()">Submit request</button>
+    </div>
+    <h1 style="font-size:16px">Open requests</h1>
+    <table><thead><tr><th>Item</th><th>Requested</th><th class="qty">Qty</th><th>Status</th><th>Remarks</th><th>Stock team</th></tr></thead>
+    <tbody>${openRows||'<tr><td colspan="6" style="color:var(--ink-soft)">No open requests.</td></tr>'}</tbody></table>
+    <h1 style="font-size:16px;margin-top:22px">Completed requests</h1>
+    <div class="sub">Kept permanently for reference</div>
+    <table><thead><tr><th>Item</th><th>Requested</th><th class="qty">Qty</th><th>Outcome</th><th>Handled by</th><th>Remarks</th></tr></thead>
+    <tbody>${doneRows||'<tr><td colspan="6" style="color:var(--ink-soft)">Nothing completed yet.</td></tr>'}</tbody></table>`;
+}
+function addRequest(){
+  const by = $('#reqBy').value.trim();
+  const item = $('#reqItem').value.trim();
+  if(!by || !item){ toast('Name and item details are required'); return; }
+  if(!myName && by){ myName=by; try{localStorage.setItem('bollin_name',myName);}catch(e){} paintName(); }
+  const req = {_row:null, ts:new Date().toISOString(), by, item,
+               qty:Math.max(1,parseInt($('#reqQty').value||'1',10)),
+               size:$('#reqSize').value.trim(), status:'Requested',
+               handledBy:'', responded:null, remarks:''};
+  state.requests.unshift(req);
+  render(); toast('Request submitted');
+  if(LIVE) api({action:'request', by:req.by, item:req.item, qty:req.qty, size:req.size})
+             .then(()=>loadAll())
+             .catch(e=>toast('Request not saved — '+e.message));
+}
+async function respondRequest(ix, status){
+  if(!status) return;
+  const r = state.requests[ix];
+  let remarks = r.remarks||'';
+  if(status==='Other'){
+    remarks = prompt('Remarks for this request:', remarks) || '';
+    if(!remarks){ render(); return; }
+  }
+  const who = myName || prompt('Your name (stock team):','') || 'Unknown';
+  if(!myName && who!=='Unknown'){ myName=who; try{localStorage.setItem('bollin_name',myName);}catch(e){} paintName(); }
+  r.status = status; r.handledBy = who; r.responded = new Date().toISOString(); r.remarks = remarks;
+  render(); toast('Request → '+status);
+  if(LIVE && r._row){
+    try{ await api({action:'respond', row:r._row, status, by:who, remarks}); }
+    catch(err){ toast('Not saved — '+err.message); loadAll(); }
+  }
+}
+function ackAlert(ix){
+  const a = state.alerts[ix];
+  a.status = 'Acknowledged';
+  render(); toast('Alert acknowledged');
+  if(LIVE && a._row) api({action:'ack', row:a._row, by:myName||'Unknown'})
+                       .catch(e=>toast('Not saved — '+e.message));
+}
+function alertsView(){
+  const rows = state.alerts.map((a,ix)=>`<tr>
+      <td data-label=""><strong>${a.item||''}</strong></td>
+      <td data-label="Type"><span class="badge ${a.type==='Out of stock'?'b-out':a.type==='Expiry'?'b-exp':'b-low'}">${a.type}</span></td>
+      <td data-label="Detail">${a.detail||''}</td>
+      <td data-label="Raised">${a.ts?new Date(a.ts).toLocaleString('en-GB'):''}</td>
+      <td data-label="Status"><span class="badge ${a.status==='Acknowledged'?'b-ok':a.status==='Escalated'?'b-out':'b-low'}">${a.status}</span></td>
+      <td class="rowbtns" data-label="">${a.status==='Sent'||a.status==='Escalated'?`<button onclick="ackAlert(${ix})">Acknowledge</button>`:''}</td></tr>`).join('');
+  return `<h1>Alerts</h1><div class="sub">Low stock, out of stock and expiry alerts — acknowledge here or from the email. Unacknowledged alerts escalate automatically.</div>
+    <table><thead><tr><th>Item</th><th>Type</th><th>Detail</th><th>Raised</th><th>Status</th><th></th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="6" style="color:var(--ink-soft)">No alerts. The daily check runs at 8am once the sheet is connected.</td></tr>'}</tbody></table>`;
+}
+
+/* ---------------- sterilisation: use -> dispatch -> receive ---------------- */
+state.dispatch = state.dispatch || (CONFIG.API_URL ? [] : [
+  {_row:null, ref:'', dateSent:null, sentBy:'', name:'Basic Plastic Tray', code:'SET03488-006',
+   qtyOut:41, batch:'', dateUsed:'2026-07-14', usedBy:'Lisa', dateReturned:null, qtyIn:null, returnedBy:'', status:'Pending Collection'},
+  {_row:null, ref:'BC-DISP-014', dateSent:'2026-07-13', sentBy:'Lisa', name:'Light Handle', code:'SIN07949-031',
+   qtyOut:1, batch:'LT-2026-014', dateUsed:'2026-07-12', usedBy:'Lisa', dateReturned:null, qtyIn:null, returnedBy:'', status:'Out'},
+  {_row:null, ref:'BC-DISP-013', dateSent:'2026-07-06', sentBy:'Lisa', name:'Freeman Areola Marker', code:'SIN08457',
+   qtyOut:1, batch:'LT-2026-013', dateUsed:'2026-07-05', usedBy:'Lisa', dateReturned:'2026-07-10', qtyIn:1, returnedBy:'Lisa', status:'Returned'}
+]);
+let sterTab = 'use';
+const selDsp = new Set(), selRcv = new Set();
+
+const DSTATUS = {
+  'Pending Collection': '<span class="badge b-low">Pending collection</span>',
+  'Out':      '<span class="badge b-exp">Out at CSSD</span>',
+  'Partial':  '<span class="badge b-low">Partial</span>',
+  'Returned': '<span class="badge b-ok">Returned</span>'
+};
+const dFmt = d => d ? new Date(d).toLocaleDateString('en-GB') : '—';
+
+function sterilView(){
+  if((sterTab==='dispatch' && !can('dispatch')) || (sterTab==='receive' && !can('receive'))) sterTab='use';
+  const pending = state.dispatch.filter(d=>d.status==='Pending Collection');
+  const out     = state.dispatch.filter(d=>d.status==='Out' || d.status==='Partial');
+  const tabBtn = (id,label,count)=>`<button onclick="sterTab='${id}';render()"
+      style="padding:10px 16px;border:none;border-bottom:3px solid ${sterTab===id?'var(--pine)':'transparent'};
+      background:none;font-weight:${sterTab===id?'700':'600'};font-size:14.5px;
+      color:${sterTab===id?'var(--pine)':'var(--ink-soft)'}">${label}${count?` <span class="badge ${id==='receive'?'b-exp':'b-low'}" style="font-size:11px">${count}</span>`:''}</button>`;
+  let body = '';
+  if(sterTab==='use') body = sterilUseTab(pending);
+  else if(sterTab==='dispatch') body = sterilDispatchTab(pending);
+  else if(sterTab==='receive') body = sterilReceiveTab(out);
+  else if(sterTab==='onhand') body = sterilOnHandTab();
+  else body = sterilHistoryTab();
+  return `
+    <h1>Sterilisation</h1>
+    <div class="sub">Log instruments as used → dispatch to CSSD once or twice a week → receive them back.</div>
+    <div style="border-bottom:1px solid var(--line);margin-bottom:16px;display:flex;gap:4px;overflow-x:auto">
+      ${tabBtn('use','1 · Log used', pending.length)}
+      ${can('dispatch')?tabBtn('dispatch','2 · Dispatch', pending.length):''}
+      ${can('receive')?tabBtn('receive','3 · Receive', out.length):''}
+      ${tabBtn('onhand','On hand', instExpiring().length)}
+      ${tabBtn('history','History','')}
+    </div>
+    ${body}`;
+}
+
+/* --- tab 1: log used --- */
+function sterilUseTab(pending){
+  const opts = state.items.filter(i=>i.tracker==='instruments')
+    .map(i=>`<option value="${i.code||i.barcode}">${i.name} — ${i.code||i.barcode}</option>`).join('');
+  const rows = pending.map(d=>{
+    const ix = state.dispatch.indexOf(d);
+    return `<tr>
+      <td data-label=""><strong>${d.name||d.code}</strong> <span class="code" style="font-family:var(--mono);font-size:12px">${d.code}</span></td>
+      <td data-label="Used">${dFmt(d.dateUsed)}${d.usedBy?' · '+d.usedBy:''}</td>
+      <td class="qty" data-label="Qty">${d.qtyOut}</td>
+      <td data-label="Status">${DSTATUS[d.status]||d.status}</td></tr>`;
+  }).join('');
+  return `
+    <div class="toolrow">
+      <input id="useCode" list="instList" type="text" placeholder="Scan barcode or type code / name…"
+             style="flex:2;min-width:200px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-family:var(--mono)">
+      <datalist id="instList">${opts}</datalist>
+      <input id="useQty" type="number" min="1" value="1" title="Instrument count" style="width:80px;padding:10px;border:1px solid var(--line);border-radius:8px">
+      <button class="btn primary" onclick="logUsed()">Log as used</button>
+    </div>
+    <div class="sub">Scanning anywhere on this tab logs the instrument instantly (count 1). Items below are waiting for the next dispatch.</div>
+    <table><thead><tr><th>Instrument / Tray</th><th>Used</th><th class="qty">Qty</th><th>Status</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="4" style="color:var(--ink-soft)">Nothing pending collection.</td></tr>'}</tbody></table>`;
+}
+function logUsed(codeArg, qtyArg){
+  const code = (codeArg || $('#useCode').value).trim();
+  if(!code){ toast('Scan or type a code first'); return; }
+  const qty = qtyArg || Math.max(1, parseInt(($('#useQty')&&$('#useQty').value)||'1',10));
+  const reg = state.items.find(i=>i.tracker==='instruments' && (i.code===code || i.barcode===code));
+  const line = {_row:null, ref:'', dateSent:null, sentBy:'', name:reg?reg.name:'',
+    code:reg?(reg.code||code):code, qtyOut:qty, batch:'',
+    dateUsed:new Date().toISOString(), usedBy:myName||'Unknown',
+    dateReturned:null, qtyIn:null, returnedBy:'', status:'Pending Collection'};
+  state.dispatch.unshift(line);
+  render();
+  toast('Logged as used: '+(line.name||code)+' — pending collection');
+  if(LIVE){
+    api({action:'useLog', by:myName||'Unknown', date:line.dateUsed,
+         lines:[{code:line.code, name:line.name, qty}]})
+      .then(()=>loadAll())
+      .catch(e=>toast('Not saved — '+e.message));
+  }
+}
+
+/* --- tab 2: dispatch --- */
+function sterilDispatchTab(pending){
+  const allSel = pending.length && pending.every(d=>selDsp.has(state.dispatch.indexOf(d)));
+  const rows = pending.map(d=>{
+    const ix = state.dispatch.indexOf(d);
+    return `<tr>
+      <td data-label="" style="display:flex;gap:10px;align-items:center">
+        <input type="checkbox" ${selDsp.has(ix)?'checked':''} onchange="toggleSel(selDsp,${ix})" style="width:18px;height:18px">
+        <span><strong>${d.name||d.code}</strong> <span class="code" style="font-family:var(--mono);font-size:12px">${d.code}</span></span></td>
+      <td data-label="Used">${dFmt(d.dateUsed)}${d.usedBy?' · '+d.usedBy:''}</td>
+      <td class="qty" data-label="Qty">${d.qtyOut}</td></tr>`;
+  }).join('');
+  return `
+    <div class="toolrow">
+      <input id="dsRef" type="text" value="${nextDispatchRef()}" title="Dispatch ref" style="width:130px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-family:var(--mono)">
+      <input id="dsDate" type="date" value="${new Date().toISOString().slice(0,10)}" style="padding:9px 10px;border:1px solid var(--line);border-radius:8px">
+      <input id="dsBy" type="text" placeholder="Sent by" value="${myName||''}" style="width:130px;padding:9px 10px;border:1px solid var(--line);border-radius:8px">
+      <input id="dsBatch" type="text" placeholder="Batch / Lot" style="width:120px;padding:9px 10px;border:1px solid var(--line);border-radius:8px">
+      <input id="dsInstr" type="text" placeholder="Special instructions (optional)" style="flex:1;min-width:150px;padding:9px 10px;border:1px solid var(--line);border-radius:8px">
+    </div>
+    <div class="toolrow">
+      <label style="display:flex;gap:8px;align-items:center;font-size:14px">
+        <input type="checkbox" ${allSel?'checked':''} onchange="selAll(selDsp,'Pending Collection',this.checked)" style="width:18px;height:18px">
+        Tick all (${pending.length})
+      </label>
+      <button class="btn primary" onclick="doDispatch()">Dispatch ${selDsp.size||''} ticked item(s)</button>
+    </div>
+    <table><thead><tr><th>Instrument / Tray</th><th>Used</th><th class="qty">Qty</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="3" style="color:var(--ink-soft)">Nothing pending collection — log used instruments in tab 1 first.</td></tr>'}</tbody></table>`;
+}
+async function doDispatch(){
+  const picked = [...selDsp].map(ix=>state.dispatch[ix]).filter(d=>d && d.status==='Pending Collection');
+  if(!picked.length){ toast('Tick at least one item'); return; }
+  const ref = $('#dsRef').value.trim()||nextDispatchRef();
+  const date = $('#dsDate').value||new Date().toISOString().slice(0,10);
+  const by = $('#dsBy').value.trim()||myName||'Unknown';
+  const batch = $('#dsBatch').value.trim(), instr = $('#dsInstr').value.trim();
+  picked.forEach(d=>{ d.ref=ref; d.dateSent=date; d.sentBy=by; if(batch) d.batch=batch; d.status='Out'; });
+  const rows = picked.map(d=>d._row).filter(Boolean);
+  selDsp.clear();
+  sterTab='receive'; render();
+  toast(picked.length+' item(s) dispatched — '+ref);
+  if(LIVE){
+    try{ await api({action:'dispatchAssign', rows, ref, date, by, batch, instructions:instr}); loadAll(); }
+    catch(err){ toast('Not saved — '+err.message); loadAll(); }
+  }
+}
+
+/* --- tab 3: receive --- */
+function sterilReceiveTab(out){
+  const allSel = out.length && out.every(d=>selRcv.has(state.dispatch.indexOf(d)));
+  const byRef = {};
+  out.forEach(d=>{ (byRef[d.ref||'(no ref)'] = byRef[d.ref||'(no ref)']||[]).push(d); });
+  const banner = out.length ? `
+    <div class="note" style="background:var(--gold-soft);border-color:#E4D3A8;color:#7A5A14">
+      <strong>Awaiting arrival: ${out.length} item(s)</strong> across ${Object.keys(byRef).length} dispatch(es) —
+      ${Object.keys(byRef).map(r=>r+' ('+byRef[r].length+')').join(' · ')}
+    </div>` : '';
+  const rows = out.map(d=>{
+    const ix = state.dispatch.indexOf(d);
+    return `<tr>
+      <td data-label="" style="display:flex;gap:10px;align-items:center">
+        <input type="checkbox" ${selRcv.has(ix)?'checked':''} onchange="toggleSel(selRcv,${ix})" style="width:18px;height:18px">
+        <span><strong>${d.name||d.code}</strong> <span class="code" style="font-family:var(--mono);font-size:12px">${d.code}</span></span></td>
+      <td class="code" data-label="Dispatch">${d.ref||'—'}</td>
+      <td data-label="Sent">${dFmt(d.dateSent)}${d.sentBy?' · '+d.sentBy:''}</td>
+      <td class="qty" data-label="Qty">${d.qtyOut}</td>
+      <td data-label="Status">${DSTATUS[d.status]||d.status}</td></tr>`;
+  }).join('');
+  return `${banner}
+    <div class="toolrow">
+      <label style="display:flex;gap:8px;align-items:center;font-size:14px">
+        <input type="checkbox" ${allSel?'checked':''} onchange="selAll(selRcv,'Out',this.checked)" style="width:18px;height:18px">
+        Tick all (${out.length})
+      </label>
+      <button class="btn primary" onclick="doReceive()">Mark ${selRcv.size||''} ticked as received</button>
+    </div>
+    <div class="sub">Tick only what physically arrived — anything left unticked stays on the awaiting list for the next delivery. Scanning a code on this tab ticks it.</div>
+    <table><thead><tr><th>Instrument / Tray</th><th>Dispatch</th><th>Sent</th><th class="qty">Qty</th><th>Status</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="5" style="color:var(--ink-soft)">Nothing out at CSSD — all instruments are home.</td></tr>'}</tbody></table>`;
+}
+async function doReceive(){
+  const picked = [...selRcv].map(ix=>state.dispatch[ix]).filter(d=>d && (d.status==='Out'||d.status==='Partial'));
+  if(!picked.length){ toast('Tick at least one item'); return; }
+  const by = myName || prompt('Received by:','') || 'Unknown';
+  if(!myName && by!=='Unknown'){ myName=by; try{localStorage.setItem('bollin_name',myName);}catch(e){} paintName(); }
+  picked.forEach(d=>{
+    d.dateReturned=new Date().toISOString(); d.returnedBy=by; d.qtyIn=d.qtyOut; d.status='Returned';
+    const reg = state.items.find(i=>i.tracker==='instruments' && (i.code===d.code || i.barcode===d.code));
+    const base = d.dateSent ? new Date(d.dateSent) : new Date();
+    base.setFullYear(base.getFullYear()+1);
+    if(reg){ reg.expiry = base.toISOString().slice(0,10); reg.status='At Bollin'; }
+    else if(d.code) state.items.push({tracker:'instruments', _row:null, code:d.code, barcode:d.code,
+      name:d.name||d.code, cat:'Instrument', supplier:'', loc:'Bollin', unit:'Tray',
+      qty:d.qtyOut||1, reorder:0, cost:null, expiry:base.toISOString().slice(0,10),
+      batch:'', status:'At Bollin'});
+  });
+  const rows = picked.map(d=>d._row).filter(Boolean);
+  selRcv.clear(); render();
+  toast(picked.length+' item(s) received back');
+  if(LIVE){
+    try{ await api({action:'dispatchReceive', rows, by}); loadAll(); }
+    catch(err){ toast('Not saved — '+err.message); loadAll(); }
+  }
+}
+
+/* --- tab 4: history --- */
+function sterilHistoryTab(){
+  const q = (window._dq||'').toLowerCase();
+  const list = state.dispatch.filter(d=>!q || (d.name||'').toLowerCase().includes(q) ||
+    (d.code||'').toLowerCase().includes(q) || (d.ref||'').toLowerCase().includes(q)).slice(0,300);
+  const rows = list.map(d=>`<tr>
+      <td data-label=""><strong>${d.name||d.code||'—'}</strong> <span class="code" style="font-family:var(--mono);font-size:12px">${d.code||''}</span></td>
+      <td data-label="Used">${dFmt(d.dateUsed)}${d.usedBy?' · '+d.usedBy:''}</td>
+      <td class="code" data-label="Dispatch">${d.ref||'—'}</td>
+      <td data-label="Sent">${dFmt(d.dateSent)}${d.sentBy?' · '+d.sentBy:''}</td>
+      <td class="qty" data-label="Out">${d.qtyOut??'—'}</td>
+      <td data-label="Returned">${d.dateReturned? dFmt(d.dateReturned)+(d.qtyIn!=null?' · in: '+d.qtyIn:'')+(d.returnedBy?' · '+d.returnedBy:'') : '—'}</td>
+      <td data-label="Status">${DSTATUS[d.status]||d.status}</td></tr>`).join('');
+  return `
+    <div class="toolrow">
+      <input type="search" placeholder="Search item, code or dispatch ref…" value="${window._dq||''}"
+             oninput="window._dq=this.value;refreshSterilTable()">
+    </div>
+    <div id="dspWrap"><table><thead><tr><th>Item / Tray</th><th>Used</th><th>Dispatch</th><th>Sent</th>
+      <th class="qty">Out</th><th>Returned</th><th>Status</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="7" style="color:var(--ink-soft)">No sterilisation records yet.</td></tr>'}</tbody></table></div>`;
+}
+function refreshSterilTable(){
+  if(currentView!=='instruments' || sterTab!=='history') return;
+  const el = document.getElementById('dspWrap');
+  if(!el) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = sterilHistoryTab();
+  const fresh = tmp.querySelector('#dspWrap');
+  if(fresh) el.innerHTML = fresh.innerHTML;
+}
+
+/* --- tab: on hand (instrument register + expiry) --- */
+function instDaysLeft(it){ return it.expiry ? Math.round((new Date(it.expiry)-new Date())/86400000) : null; }
+function instIsOut(code){ return state.dispatch.some(d=>(d.status==='Out'||d.status==='Partial') && d.code===code); }
+function instExpiring(){
+  return state.items.filter(i=>i.tracker==='instruments')
+    .filter(i=>{ const d=instDaysLeft(i); return d!=null && d<=60; });
+}
+function sterilOnHandTab(){
+  const q = (window._iq||'').toLowerCase();
+  const all = state.items.filter(i=>i.tracker==='instruments')
+    .filter(i=>!q || i.name.toLowerCase().includes(q) || (i.code||'').toLowerCase().includes(q));
+  // expiring soonest first, no-expiry last
+  all.sort((a,b)=>{
+    const da=instDaysLeft(a), db=instDaysLeft(b);
+    if(da==null && db==null) return a.name.localeCompare(b.name);
+    if(da==null) return 1; if(db==null) return -1;
+    return da-db;
+  });
+  const expSoon = instExpiring();
+  const banner = expSoon.length ? `
+    <div class="note" style="background:var(--red-bg);border-color:#E5B5B0;color:var(--red)">
+      <strong>${expSoon.length} instrument(s) expire within 60 days</strong> — plan re-sterilisation:
+      ${expSoon.slice(0,6).map(i=>i.name).join(' · ')}${expSoon.length>6?' · …':''}
+    </div>` : '';
+  const rows = all.map(it=>{
+    const d = instDaysLeft(it);
+    const expBadge = d==null ? '<span style="color:var(--ink-soft)">not set</span>'
+      : d<0 ? '<span class="badge b-out">Expired '+(-d)+'d ago</span>'
+      : d<=60 ? '<span class="badge b-low">'+d+'d left</span>'
+      : new Date(it.expiry).toLocaleDateString('en-GB');
+    const where = instIsOut(it.code||it.barcode)
+      ? '<span class="badge b-exp">At CSSD</span>' : '<span class="badge b-ok">At Bollin</span>';
+    return `<tr style="${d!=null&&d<=60?'background:#FFF7F0':''}">
+      <td data-label=""><strong>${it.name}</strong> <span class="code" style="font-family:var(--mono);font-size:12px">${it.code||it.barcode||''}</span></td>
+      <td data-label="Type">${it.cat||'—'}</td>
+      <td class="qty" data-label="In tray">${it.qty||1}</td>
+      <td data-label="Sterile until">${expBadge}</td>
+      <td data-label="Where">${where}</td>
+    </tr>`;
+  }).join('');
+  return `${banner}
+    <div class="toolrow">
+      ${can('instr')?`<button class="btn primary" onclick="openInstrument('')">＋ Add instrument</button>`:''}
+      <input type="search" placeholder="Search instrument or code…" value="${window._iq||''}"
+             oninput="window._iq=this.value;refreshOnHand()">
+      <span style="color:var(--ink-soft);font-size:13px;margin-left:auto">${all.length} on register</span>
+    </div>
+    <div class="sub">What we hold, with sterile expiry. Expiry is assigned automatically as dispatch date + 1 year when items come back from CSSD. Unknown items join the register as they are received.</div>
+    <div id="ohWrap"><table><thead><tr><th>Instrument / Tray</th><th>Type</th><th class="qty">In tray</th>
+      <th>Sterile until</th><th>Where</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="5" style="color:var(--ink-soft)">No instruments on the register yet.</td></tr>'}</tbody></table></div>`;
+}
+function refreshOnHand(){
+  if(currentView!=='instruments' || sterTab!=='onhand') return;
+  const el = document.getElementById('ohWrap');
+  if(!el) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = sterilOnHandTab();
+  const fresh = tmp.querySelector('#ohWrap');
+  if(fresh) el.innerHTML = fresh.innerHTML;
+}
+
+/* --- instrument register add (manual or from unknown scan) --- */
+let instAfterSave = null;   // e.g. log-as-used after registering a scanned code
+function openInstrument(code, afterSave){
+  instAfterSave = afterSave || null;
+  $('#inCode').value = code||'';
+  ['inName','inDesc','inNotes'].forEach(id=>$('#'+id).value='');
+  $('#inType').value='Tray'; $('#inQty').value=1; $('#inExp').value='';
+  $('#instDlgTitle').textContent = code ? 'New code scanned — add its details' : 'Add instrument / tray';
+  instDlg.showModal();
+  (code ? $('#inName') : $('#inCode')).focus();
+}
+async function saveInstrument(){
+  const code = $('#inCode').value.trim(), name = $('#inName').value.trim();
+  if(!code || !name){ toast('Code and name are required'); return; }
+  const it = {tracker:'instruments', _row:null, code, barcode:code, name,
+    cat:$('#inType').value, supplier:'', loc:'Bollin', unit:'Tray',
+    qty:Math.max(1,parseInt($('#inQty').value||'1',10)), reorder:0, cost:null,
+    expiry:$('#inExp').value||null, batch:'', status:'At Bollin'};
+  state.items.push(it);
+  state.barcodeLinks[code] = state.items.length-1;
+  instDlg.close();
+  toast('Added to register: '+name);
+  const after = instAfterSave; instAfterSave = null;
+  if(after) after(it); else render();
+  if(LIVE){
+    try{
+      await api({action:'instrumentAdd', fields:{Code:code, Barcode:code, Name:name,
+        Category:it.cat, Description:$('#inDesc').value.trim(), QtyInTray:it.qty,
+        Expiry:it.expiry, Notes:$('#inNotes').value.trim(), Status:'At Bollin'}});
+      loadAll();
+    }catch(err){ toast('Not saved to sheet — '+err.message); }
+  }
+}
+
+/* --- shared helpers --- */
+function toggleSel(set, ix){ set.has(ix) ? set.delete(ix) : set.add(ix); render(); }
+function selAll(set, status, on){
+  set.clear();
+  if(on) state.dispatch.forEach((d,ix)=>{
+    if(status==='Out' ? (d.status==='Out'||d.status==='Partial') : d.status===status) set.add(ix);
+  });
+  render();
+}
+function nextDispatchRef(){
+  let max = 0;
+  state.dispatch.forEach(d=>{
+    const m = /^BC-DISP-(\d+)$/.exec(String(d.ref||''));
+    if(m) max = Math.max(max, parseInt(m[1],10));
+  });
+  return 'BC-DISP-' + String(max+1).padStart(3,'0');
+}
+function sterilScan(code){
+  const norm = c => String(c||'').trim();
+  if(sterTab==='use' || sterTab==='onhand'){
+    const cd = norm(code);
+    const known = state.items.some(i=>i.tracker==='instruments' && (i.code===cd || i.barcode===cd));
+    if(!known && can('instr')){
+      openInstrument(cd, (it)=>{ logUsed(it.code, 1); });   // register, then log as used
+      return;
+    }
+    logUsed(cd, 1); return;
+  }
+  if(sterTab==='dispatch'){
+    const ix = state.dispatch.findIndex(d=>d.status==='Pending Collection' && d.code===norm(code));
+    if(ix>=0){ selDsp.add(ix); render(); toast('Ticked for dispatch: '+(state.dispatch[ix].name||code)); }
+    else toast('No pending item with code '+code);
+    return;
+  }
+  if(sterTab==='receive'){
+    const ix = state.dispatch.findIndex(d=>(d.status==='Out'||d.status==='Partial') && d.code===norm(code));
+    if(ix>=0){ selRcv.add(ix); render(); toast('Ticked as received: '+(state.dispatch[ix].name||code)); }
+    else toast('No outstanding item with code '+code);
+    return;
+  }
+  toast('Scanned '+code+' — use tabs 1–3 to act on it');
+}
+
+/* ---------------- implants ---------------- *//* ---------------- implants ---------------- */
+state.implants = state.implants || (CONFIG.API_URL ? [] : [
+  {_row:null, initials:'JS', pat:'PAT-1041', surgeon:'Mr Siddiqui', surgeryDate:'2026-07-28',
+   details:'Mentor CPG 323 350cc', qty:2, remarks:'', dateOrdered:'2026-07-10', orderedBy:'Reception',
+   status:'Ordered', receivedBy:'', receivedQty:null, storage:'', scannedRef:'', returnDetails:'', returnedQty:null, returnedBy:''},
+  {_row:null, initials:'AK', pat:'PAT-1055', surgeon:'Mr Siddiqui', surgeryDate:'2026-08-04',
+   details:'Motiva Ergonomix 275cc', qty:3, remarks:'1 spare requested', dateOrdered:null, orderedBy:'',
+   status:'Pending', receivedBy:'', receivedQty:null, storage:'', scannedRef:'', returnDetails:'', returnedQty:null, returnedBy:''}
+]);
+let retImp = null, rcvImp = null, rcvRef = '';
+
+function implantsView(){
+  const stBadge = s => `<span class="badge ${s==='Delivered'?'b-ok':s==='Ordered'?'b-exp':'b-low'}">${s}</span>`;
+  const row = (im,ix)=>`<tr>
+      <td data-label=""><strong>${im.initials}</strong> <span class="code" style="font-family:var(--mono);font-size:12px">${im.pat}</span></td>
+      <td data-label="Surgeon">${im.surgeon||'—'}</td>
+      <td data-label="Surgery">${im.surgeryDate?new Date(im.surgeryDate).toLocaleDateString('en-GB'):'—'}</td>
+      <td data-label="Implants">${im.details}${im.qty?' <span class="code" style="font-size:12px">×'+im.qty+'</span>':''}
+        ${im.remarks?'<div style="font-size:11.5px;color:var(--ink-soft)">'+im.remarks+'</div>':''}</td>
+      <td data-label="Ordered">${im.dateOrdered?new Date(im.dateOrdered).toLocaleDateString('en-GB'):'—'}${im.orderedBy?' · '+im.orderedBy:''}</td>
+      <td data-label="Status">${stBadge(im.status)}
+        ${im.receivedBy?'<div style="font-size:11px;color:var(--ink-soft)">rec. '+im.receivedBy+(im.receivedQty?' ×'+im.receivedQty:'')+(im.storage?' → '+im.storage:'')+'</div>':''}</td>
+      <td data-label="Return">${im.returnDetails? (im.returnedQty?'×'+im.returnedQty+' ':'')+im.returnDetails+' <span style="font-size:11px;color:var(--ink-soft)">by '+(im.returnedBy||'?')+'</span>':'—'}</td>
+      <td class="rowbtns" data-label="">
+        ${im.status==='Pending'?`<button onclick="setImplantStatus(${ix},'Ordered')">Mark ordered</button>`:''}
+        ${im.status!=='Delivered'?`<button onclick="openReceive(${ix},'')">Mark delivered</button>`:''}
+        ${im.status==='Delivered'&&!im.returnDetails?`<button onclick="openReturn(${ix})">Return extras</button>`:''}
+      </td></tr>`;
+  const rows = state.implants.map(row).join('');
+  return `
+    <h1>Implant orders</h1>
+    <div class="sub">Track every implant from consultation to delivery. Scanning a delivery box on this page starts the receive process.</div>
+    <div class="toolrow">
+      <button class="btn primary" onclick="openImplant()">＋ New implant order</button>
+      <span style="color:var(--ink-soft);font-size:13px">${state.implants.filter(i=>i.status==='Pending').length} pending ·
+        ${state.implants.filter(i=>i.status==='Ordered').length} ordered ·
+        ${state.implants.filter(i=>i.status==='Delivered').length} delivered</span>
+    </div>
+    <div class="toolrow" style="align-items:center">
+      <span style="font-size:13px;color:var(--ink-soft)">Status report:</span>
+      <select id="repRange" onchange="$('#repCustom').style.display=this.value==='custom'?'flex':'none'">
+        <option value="day">Today</option><option value="week">This week</option>
+        <option value="month" selected>This month</option><option value="custom">Custom dates</option>
+      </select>
+      <select id="repBasis">
+        <option value="surgeryDate">By surgery date</option>
+        <option value="dateOrdered">By date ordered</option>
+      </select>
+      <span id="repCustom" style="display:none;gap:6px;align-items:center">
+        <input id="repFrom" type="date" style="padding:8px;border:1px solid var(--line);border-radius:8px">
+        <span>to</span>
+        <input id="repTo" type="date" style="padding:8px;border:1px solid var(--line);border-radius:8px">
+      </span>
+      <button class="btn primary" onclick="implantReportPDF()">Download PDF</button>
+      <button class="btn" onclick="printImplantReport()">Print</button>
+    </div>
+    <table><thead><tr><th>Patient</th><th>Surgeon</th><th>Surgery</th><th>Implants</th>
+      <th>Ordered</th><th>Status</th><th>Return</th><th></th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="8" style="color:var(--ink-soft)">No implant orders yet.</td></tr>'}</tbody></table>`;
+}
+
+function openImplant(){
+  ['imInit','imPat','imSurg','imDate','imDet','imRem'].forEach(id=>$('#'+id).value='');
+  $('#imQty').value = 2;
+  $('#imOrd').value = new Date().toISOString().slice(0,10);
+  $('#imBy').value = myName||'';
+  $('#imStat').value = 'Pending';
+  impDlg.showModal(); $('#imInit').focus();
+}
+async function saveImplant(){
+  const im = {_row:null, initials:$('#imInit').value.trim().toUpperCase(),
+    pat:$('#imPat').value.trim(), surgeon:$('#imSurg').value.trim(),
+    surgeryDate:$('#imDate').value||null, details:$('#imDet').value.trim(),
+    qty:Math.max(1,parseInt($('#imQty').value||'1',10)), remarks:$('#imRem').value.trim(),
+    dateOrdered:$('#imOrd').value||null, orderedBy:$('#imBy').value.trim()||myName||'Unknown',
+    status:$('#imStat').value, receivedBy:'', receivedQty:null, storage:'',
+    scannedRef:'', returnDetails:'', returnedQty:null, returnedBy:''};
+  if(!im.initials || !im.pat || !im.details){ toast('Initials, PAT number and implant details are required'); return; }
+  state.implants.unshift(im);
+  impDlg.close(); render(); toast('Implant order added for '+im.initials);
+  if(LIVE){
+    try{ await api({action:'implantAdd', fields:{PatientInitials:im.initials, PATNumber:im.pat,
+      Surgeon:im.surgeon, SurgeryDate:im.surgeryDate, ImplantDetails:im.details,
+      Qty:im.qty, Remarks:im.remarks,
+      DateOrdered:im.dateOrdered, OrderedBy:im.orderedBy, Status:im.status}});
+      loadAll();
+    }catch(err){ toast('Not saved to sheet — '+err.message); }
+  }
+}
+async function setImplantStatus(ix, status){
+  const im = state.implants[ix];
+  im.status = status;
+  render(); toast(im.initials+' ('+im.pat+') → '+status);
+  if(LIVE && im._row){
+    try{ await api({action:'implantUpdate', row:im._row, fields:{Status:status}}); }
+    catch(err){ toast('Not saved to sheet — '+err.message); loadAll(); }
+  }
+}
+function openReceive(ix, scannedRef){
+  rcvImp = state.implants[ix]; rcvRef = scannedRef||'';
+  $('#rcvName').textContent = rcvImp.initials + ' · ' + rcvImp.pat;
+  $('#rcvInfo').textContent = rcvImp.details + (rcvImp.qty?' ×'+rcvImp.qty:'') + (rcvRef?' — scanned: '+rcvRef:'');
+  $('#rcvBy').value = myName||'';
+  $('#rcvQty').value = rcvImp.qty || 1;
+  $('#rcvLoc').value = '';
+  impRecvFormDlg.showModal();
+}
+async function saveReceive(){
+  const by = $('#rcvBy').value.trim(), loc = $('#rcvLoc').value.trim();
+  const qty = Math.max(1, parseInt($('#rcvQty').value||'1',10));
+  if(!by || !loc){ toast('Name and storage location are required'); return; }
+  if(!myName){ myName=by; try{localStorage.setItem('bollin_name',myName);}catch(e){} paintName(); }
+  rcvImp.status='Delivered'; rcvImp.receivedBy=by; rcvImp.receivedQty=qty;
+  rcvImp.storage=loc; if(rcvRef) rcvImp.scannedRef=rcvRef;
+  impRecvFormDlg.close(); render(); toast('Delivered: '+rcvImp.initials+' ×'+qty+' → '+loc);
+  if(LIVE && rcvImp._row){
+    try{ await api({action:'implantUpdate', row:rcvImp._row, fields:{
+      Status:'Delivered', ReceivedBy:by, ReceivedQty:qty, StorageLocation:loc,
+      ReceivedDate:new Date().toISOString(), ScannedRef:rcvRef||''}}); }
+    catch(err){ toast('Not saved to sheet — '+err.message); loadAll(); }
+  }
+}
+function openReturn(ix){
+  retImp = state.implants[ix];
+  $('#retName').textContent = retImp.initials + ' · ' + retImp.pat;
+  $('#retInfo').textContent = retImp.details;
+  $('#retDet').value=''; $('#retQty').value=1; $('#retBy').value = myName||'';
+  impRetDlg.showModal();
+}
+async function saveReturn(){
+  const det = $('#retDet').value.trim();
+  const qty = Math.max(1, parseInt($('#retQty').value||'1',10));
+  if(!det){ toast('Describe what is being returned'); return; }
+  retImp.returnDetails = det; retImp.returnedQty = qty;
+  retImp.returnedBy = $('#retBy').value.trim()||myName||'Unknown';
+  impRetDlg.close(); render(); toast('Return recorded');
+  if(LIVE && retImp._row){
+    try{ await api({action:'implantUpdate', row:retImp._row, fields:{
+      ReturnDetails:det, ReturnedQty:qty, ReturnedBy:retImp.returnedBy,
+      ReturnedDate:new Date().toISOString()}}); }
+    catch(err){ toast('Not saved to sheet — '+err.message); loadAll(); }
+  }
+}
+function implantScan(code){
+  const known = state.implants.findIndex(i=>i.scannedRef && i.scannedRef===code);
+  if(known>=0 && state.implants[known].status!=='Delivered'){
+    openReceive(known, code); return;
+  }
+  const waiting = state.implants.map((im,ix)=>({im,ix}))
+    .filter(x=>x.im.status!=='Delivered');
+  if(!waiting.length){ toast('No open implant orders to receive'); return; }
+  $('#recvCode').textContent = 'Scanned: '+code;
+  $('#recvList').innerHTML = waiting.map(x=>`
+    <div style="padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer"
+         onclick="impRecvDlg.close();openReceive(${x.ix},'${code.replace(/'/g,"\\'")}')">
+      <strong>${x.im.initials} · ${x.im.pat}</strong>
+      <div style="font-size:12px;color:var(--ink-soft)">${x.im.details} — ${x.im.status}</div></div>`).join('');
+  impRecvDlg.showModal();
+}
+
+function implantReportData(){
+  const range = $('#repRange').value, basis = $('#repBasis').value;
+  const today = new Date(); today.setHours(0,0,0,0);
+  let from, to, label;
+  if(range==='day'){ from=new Date(today); to=new Date(today); label='Today '+today.toLocaleDateString('en-GB'); }
+  else if(range==='week'){
+    from=new Date(today); from.setDate(from.getDate()-((from.getDay()+6)%7));
+    to=new Date(from); to.setDate(to.getDate()+6);
+    label=from.toLocaleDateString('en-GB')+' - '+to.toLocaleDateString('en-GB');
+  } else if(range==='month'){
+    from=new Date(today.getFullYear(),today.getMonth(),1);
+    to=new Date(today.getFullYear(),today.getMonth()+1,0);
+    label=from.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+  } else {
+    if(!$('#repFrom').value || !$('#repTo').value){ toast('Pick both custom dates'); return null; }
+    from=new Date($('#repFrom').value); to=new Date($('#repTo').value);
+    label=from.toLocaleDateString('en-GB')+' - '+to.toLocaleDateString('en-GB');
+  }
+  to.setHours(23,59,59);
+  const rows = state.implants
+    .filter(im=>{ const d = im[basis] ? new Date(im[basis]) : null; return d && d>=from && d<=to; })
+    .sort((a,b)=> new Date(a[basis]) - new Date(b[basis]));
+  if(!rows.length){ toast('No implant orders in that period'); return null; }
+  return {rows, label, basis};
+}
+
+async function implantReportPDF(){
+  const data = implantReportData();
+  if(!data) return;
+  const {rows, label, basis} = data;
+  const fmt = d => d? new Date(d).toLocaleDateString('en-GB') : '';
+  const totals = {Pending:0, Ordered:0, Delivered:0};
+  rows.forEach(im=>{ if(totals[im.status]!=null) totals[im.status]++; });
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+
+  // letterhead logo (best effort — skipped silently if it can't load)
+  try{
+    const blob = await fetch('logo.png').then(r=>r.blob());
+    const dataUrl = await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(blob);});
+    const img = await new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.src=dataUrl;});
+    const hMM = 14, wMM = hMM * (img.width/img.height);
+    doc.addImage(dataUrl, 'PNG', 10, 8, wMM, hMM);
+  }catch(e){}
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(43,97,104);
+  doc.text('Implant Status Report', W-10, 13, {align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90,90,90);
+  doc.text(label + '  ·  sorted by ' + (basis==='surgeryDate'?'surgery date':'date ordered') +
+    '  ·  ' + rows.length + ' orders   (Pending ' + totals.Pending +
+    '  ·  Ordered ' + totals.Ordered + '  ·  Delivered ' + totals.Delivered + ')', W-10, 18.5, {align:'right'});
+  doc.text('Printed ' + new Date().toLocaleString('en-GB') + (myName?' by '+myName:''), W-10, 23, {align:'right'});
+  doc.setDrawColor(176,138,62); doc.setLineWidth(0.8); doc.line(10, 25.5, W-10, 25.5);
+
+  doc.autoTable({
+    startY: 28,
+    margin: {left:10, right:10},
+    head: [['Surgery\nDate','Patient\nInitials','PAT\nNumber','Surgeon','Implant Details','Qty',
+            'Date\nOrdered','Ordered By','Status','Received By','Qty\nRec.','Kept In',
+            'Qty\nRet.','Return Details','Returned By','Remarks']],
+    body: rows.map(im=>[
+      fmt(im.surgeryDate), im.initials, im.pat, im.surgeon||'', im.details, im.qty??'',
+      fmt(im.dateOrdered), im.orderedBy||'', im.status, im.receivedBy||'',
+      im.receivedQty??'', im.storage||'', im.returnedQty??'', im.returnDetails||'',
+      im.returnedBy||'', im.remarks||'' ]),
+    theme: 'grid',
+    styles: {font:'helvetica', fontSize:7.5, cellPadding:1.6, lineColor:[185,201,197],
+             lineWidth:0.15, textColor:[23,37,31], overflow:'linebreak', valign:'middle'},
+    headStyles: {fillColor:[43,97,104], textColor:255, fontSize:7.5, fontStyle:'bold',
+                 halign:'left', valign:'middle'},
+    alternateRowStyles: {fillColor:[242,247,246]},
+    columnStyles: {
+      0:{cellWidth:16}, 1:{cellWidth:13, halign:'center'}, 2:{cellWidth:16},
+      3:{cellWidth:20}, 4:{cellWidth:38}, 5:{cellWidth:8, halign:'center'},
+      6:{cellWidth:16}, 7:{cellWidth:16}, 8:{cellWidth:15},
+      9:{cellWidth:16}, 10:{cellWidth:9, halign:'center'}, 11:{cellWidth:18},
+      12:{cellWidth:9, halign:'center'}, 13:{cellWidth:20}, 14:{cellWidth:16}
+      /* Remarks takes the remaining ~31mm automatically */
+    },
+    didParseCell: d => {
+      if(d.section==='body' && d.column.index===8){
+        d.cell.styles.fontStyle='bold';
+        d.cell.styles.textColor = d.cell.raw==='Delivered' ? [14,80,72]
+          : d.cell.raw==='Ordered' ? [122,74,0] : [166,27,27];
+      }
+    },
+    didDrawPage: d => {
+      doc.setFontSize(7.5); doc.setTextColor(140,140,140);
+      doc.text('Bollin Clinic Stock Manager — Implant orders ' + label,
+               10, doc.internal.pageSize.getHeight()-6);
+      doc.text('Page ' + d.pageNumber, W-10, doc.internal.pageSize.getHeight()-6, {align:'right'});
+    }
+  });
+
+  doc.save('Implant_Report_' + label.replace(/[^0-9A-Za-z]+/g,'_') + '.pdf');
+  toast('PDF downloaded');
+}
+
+function printImplantReport(){
+  const data = implantReportData();
+  if(!data) return;
+  const {rows, label, basis} = data;
+
+  const basisLabel = basis==='surgeryDate'?'surgery date':'date ordered';
+  const fmt = d => d? new Date(d).toLocaleDateString('en-GB') : '—';
+  const totals = {Pending:0, Ordered:0, Delivered:0};
+  rows.forEach(im=>{ if(totals[im.status]!=null) totals[im.status]++; });
+
+  // Excel-style flat table: one title row, one row per patient, landscape
+  const HEADERS = ['Surgery Date','Patient Initials','PAT Number','Surgeon','Implant Details','Qty',
+    'Date Ordered','Ordered By','Status','Received By','Qty Received','Kept In',
+    'Qty Returned','Return Details','Returned By','Remarks'];
+  const th = x=>'<th style="border:1px solid #9FB6B1;padding:6px 8px;text-align:left;background:#2B6168;color:#fff;font-size:8.5pt;white-space:nowrap">'+x+'</th>';
+  const td = (x,extra)=>'<td style="border:1px solid #B9C9C5;padding:5px 8px;font-size:9pt;vertical-align:top;'+(extra||'')+'">'+((x===null||x===undefined||x==='')?'—':x)+'</td>';
+  const stChip = s => '<span style="font-weight:700;color:'+
+    (s==='Delivered'?'#0E5048':s==='Ordered'?'#7A4A00':'#A61B1B')+'">'+s+'</span>';
+
+  const body = rows.map((im,i)=>'<tr style="background:'+(i%2?'#F2F7F6':'#fff')+'">'+
+      td(fmt(im.surgeryDate),'white-space:nowrap') +
+      td('<strong>'+im.initials+'</strong>','text-align:center') +
+      td('<span style="font-family:monospace">'+im.pat+'</span>','white-space:nowrap') +
+      td(im.surgeon) +
+      td(im.details) +
+      td(im.qty,'text-align:center') +
+      td(fmt(im.dateOrdered),'white-space:nowrap') +
+      td(im.orderedBy) +
+      td(stChip(im.status),'white-space:nowrap') +
+      td(im.receivedBy) +
+      td(im.receivedQty,'text-align:center') +
+      td(im.storage) +
+      td(im.returnedQty,'text-align:center') +
+      td(im.returnDetails) +
+      td(im.returnedBy) +
+      td(im.remarks) +
+    '</tr>').join('');
+
+  $('#printArea').innerHTML = `
+    <style id="printOrient">@media print{ @page{size:A4 landscape;margin:8mm} }</style>
+    <div style="font-family:var(--sans)">
+      <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:2.5px solid #B08A3E;padding-bottom:3mm;margin-bottom:3mm">
+        <div style="display:flex;align-items:center;gap:5mm">
+          <img src="logo.png" style="height:13mm">
+          <div><div style="font-size:14pt;font-weight:700;color:#2B6168">Implant Status Report</div>
+          <div style="font-size:9pt;color:#555">${label} · sorted by ${basisLabel} ·
+            ${rows.length} order(s) — Pending ${totals.Pending} · Ordered ${totals.Ordered} · Delivered ${totals.Delivered}</div></div>
+        </div>
+        <div style="text-align:right;font-size:8.5pt;color:#666">
+          Printed ${new Date().toLocaleString('en-GB')}${myName?'<br>by '+myName:''}</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>${HEADERS.map(th).join('')}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+      <div style="font-size:8pt;color:#888;margin-top:3mm">Bollin Clinic Stock Manager</div>
+    </div>`;
+  setTimeout(()=>{
+    window.print();
+    // remove the landscape override afterwards so label printing stays portrait
+    window.addEventListener('afterprint', ()=>{ const s=document.getElementById('printOrient'); if(s) s.remove(); }, {once:true});
+  }, 250);
+}
+
+/* ---------------- stocktake (month-end & annual checks) ---------------- */
+const stk = { counts:{}, type:'Month-end', tracker:'consumables', store:'', apply:true };
+
+function stkKey(it){ return it.tracker + '|' + (it.code || it.name); }
+
+function stkItems(){
+  return state.items.filter(i =>
+    i.tracker === stk.tracker &&
+    i.tracker !== 'instruments' &&
+    (!stk.store || i.loc === stk.store));
+}
+
+function setCount(key, v){
+  if(v === '' || v === null) delete stk.counts[key];
+  else stk.counts[key] = Math.max(0, parseInt(v, 10) || 0);
+  paintStkSummary();
+}
+function bumpCount(it){
+  const k = stkKey(it);
+  stk.counts[k] = (stk.counts[k] || 0) + 1;
+  render();
+  toast('Counted: ' + it.name + ' = ' + stk.counts[k]);
+}
+function paintStkSummary(){
+  const el = document.getElementById('stkSummary');
+  if(!el) return;
+  const items = stkItems();
+  const counted = items.filter(i => stkKey(i) in stk.counts);
+  const vars = counted.filter(i => stk.counts[stkKey(i)] !== i.qty);
+  el.textContent = counted.length + ' of ' + items.length + ' items counted · ' +
+                   vars.length + ' variance' + (vars.length===1?'':'s');
+}
+
+function stocktakeView(){
+  const trackers = ['consumables','meds','garments','linen'];
+  const all = state.items.filter(i=>i.tracker===stk.tracker);
+  const stores = [...new Set(all.map(i=>i.loc).filter(Boolean))].sort();
+  const items = stkItems();
+  const showCost = can('values');
+  const rows = items.map(it=>{
+    const k = stkKey(it);
+    const counted = k in stk.counts ? stk.counts[k] : '';
+    const v = counted === '' ? null : counted - it.qty;
+    const vBadge = v===null ? '' :
+      v===0 ? '<span class="badge b-ok">Match</span>' :
+      `<span class="badge ${v<0?'b-out':'b-low'}">${v>0?'+':''}${v}</span>`;
+    const vVal = (v!==null && it.cost!=null) ? (v*it.cost) : null;
+    return `<tr>
+      <td data-label=""><strong>${it.name}</strong></td>
+      <td class="code" data-label="Code">${it.code||'—'}</td>
+      <td data-label="Location">${it.loc||'—'}</td>
+      <td class="qty" data-label="Expected">${it.qty} ${it.unit}</td>
+      <td data-label="Counted"><input type="number" min="0" value="${counted}" placeholder="—"
+          style="width:90px;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:var(--mono)"
+          onchange="setCount('${k.replace(/'/g,"\\'")}',this.value)"></td>
+      <td data-label="Variance">${vBadge}</td>
+      ${showCost?`<td class="qty" data-label="Unit cost">${it.cost!=null?'£'+it.cost.toFixed(2):'—'}</td>
+      <td class="qty" data-label="Variance £" style="${vVal&&vVal<0?'color:var(--red)':''}">${vVal!=null?(vVal<0?'−':'+')+'£'+Math.abs(vVal).toFixed(2):'—'}</td>`:''}
+    </tr>`;
+  }).join('');
+
+  return `
+    <h1>Stocktake</h1>
+    <div class="sub">Month-end or annual inventory check — count shelf by shelf, scan or type counts, then save.
+      Scanning an item here adds +1 to its count.</div>
+    <div class="toolrow">
+      <select onchange="stk.type=this.value;render()">
+        <option ${stk.type==='Month-end'?'selected':''}>Month-end</option>
+        <option ${stk.type==='Annual'?'selected':''}>Annual</option>
+      </select>
+      <select onchange="stk.tracker=this.value;stk.store='';stk.counts={};render()">
+        ${trackers.map(t=>`<option value="${t}" ${t===stk.tracker?'selected':''}>${TRACKER_LABEL[t]}</option>`).join('')}
+      </select>
+      <select onchange="stk.store=this.value;render()">
+        <option value="">All stores</option>
+        ${stores.map(s=>`<option ${s===stk.store?'selected':''}>${s}</option>`).join('')}
+      </select>
+    </div>
+    <div class="toolrow" style="justify-content:space-between">
+      <span id="stkSummary" style="color:var(--ink-soft);font-size:13px"></span>
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" ${stk.apply?'checked':''} onchange="stk.apply=this.checked">
+        Adjust stock to counted values on save
+      </label>
+      ${can('reports')?`<button class="btn" onclick="stkReportPDF()">Download PDF report</button>`:''}
+      <button class="btn primary" onclick="saveStocktake()">Save ${stk.type} check</button>
+    </div>
+    ${items.length? `<table><thead><tr><th>Item</th><th>Code</th><th>Location</th>
+      <th class="qty">Expected</th><th>Counted</th><th>Variance</th>${showCost?'<th class="qty">Unit cost</th><th class="qty">Variance £</th>':''}</tr></thead><tbody>${rows}</tbody></table>`
+      : '<div class="note">No items in this selection.</div>'}`;
+}
+
+async function saveStocktake(){
+  const items = stkItems().filter(i => stkKey(i) in stk.counts);
+  if(!items.length){ toast('Enter at least one count first'); return; }
+  const entries = items.map(i=>({tracker:TRACKER_TAB[i.tracker], row:i._row||null,
+    code:i.code||i.barcode||i.name,
+    item:i.name, expected:i.qty, counted:stk.counts[stkKey(i)], store:i.loc||''}));
+  const variances = entries.filter(e=>e.counted!==e.expected).length;
+  if(!confirm('Save ' + stk.type + ' check: ' + entries.length + ' items, ' + variances +
+      ' variance(s)' + (stk.apply?' — stock will be adjusted to counted values.':'.'))) return;
+
+  if(stk.apply) items.forEach(i => i.qty = stk.counts[stkKey(i)]);   // optimistic
+  const saved = entries.length;
+  stk.counts = {};
+  render();
+  toast(stk.type + ' check saved — ' + saved + ' items');
+
+  if(LIVE){
+    try{
+      await api({action:'stocktake', checkType:stk.type, by:myName||'Unknown',
+                 apply:stk.apply, entries});
+    }catch(err){
+      toast('Not saved to sheet — ' + err.message);
+      loadAll();
+    }
+  }
+}
+
+async function stkReportPDF(){
+  const items = stkItems().filter(i => stkKey(i) in stk.counts);
+  if(!items.length){ toast('Enter counts first, then download the report'); return; }
+  const fmtC = n => n==null?'—':'£'+Number(n).toFixed(2);
+  let totValue=0, totVar=0, costed=0;
+  const body = items.map(i=>{
+    const counted = stk.counts[stkKey(i)];
+    const v = counted - i.qty;
+    const val = i.cost!=null ? counted*i.cost : null;
+    const vVal = i.cost!=null ? v*i.cost : null;
+    if(val!=null){ totValue+=val; costed++; }
+    if(vVal!=null) totVar+=vVal;
+    return [i.name, i.code||'', i.loc||'', i.qty, counted, (v>0?'+':'')+v,
+            fmtC(i.cost), val!=null?fmtC(val):'—', vVal!=null?(vVal<0?'−':'+')+'£'+Math.abs(vVal).toFixed(2):'—'];
+  });
+  const variances = items.filter(i=>stk.counts[stkKey(i)]!==i.qty).length;
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+  try{
+    const blob = await fetch('logo.png').then(x=>x.blob());
+    const dataUrl = await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(blob);});
+    const img = await new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.src=dataUrl;});
+    doc.addImage(dataUrl,'PNG',10,8,14*(img.width/img.height),14);
+  }catch(e){}
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(43,97,104);
+  doc.text(stk.type + ' Stocktake Report', W-10, 13, {align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90,90,90);
+  doc.text(TRACKER_LABEL[stk.tracker] + (stk.store?' · '+stk.store:' · all stores') +
+    '  ·  ' + items.length + ' item(s) counted, ' + variances + ' variance(s)' +
+    '  ·  ' + new Date().toLocaleString('en-GB') + (myName?' by '+myName:''), W-10, 18.5, {align:'right'});
+  doc.setDrawColor(176,138,62); doc.setLineWidth(0.8); doc.line(10, 22, W-10, 22);
+
+  doc.autoTable({
+    startY: 25, margin:{left:10,right:10},
+    head: [['Item','Code','Location','Expected','Counted','Variance','Unit Cost','Counted Value','Variance £']],
+    body,
+    foot: [[{content:'Totals ('+costed+' of '+items.length+' items costed)', colSpan:7,
+             styles:{halign:'right',fontStyle:'bold'}},
+            {content:'£'+totValue.toFixed(2), styles:{fontStyle:'bold'}},
+            {content:(totVar<0?'−':'+')+'£'+Math.abs(totVar).toFixed(2), styles:{fontStyle:'bold'}}]],
+    theme:'grid',
+    styles:{font:'helvetica',fontSize:8,cellPadding:1.8,lineColor:[185,201,197],lineWidth:0.15,
+            textColor:[23,37,31],overflow:'linebreak',valign:'middle'},
+    headStyles:{fillColor:[43,97,104],textColor:255,fontSize:8,fontStyle:'bold'},
+    footStyles:{fillColor:[246,239,223],textColor:[23,37,31]},
+    alternateRowStyles:{fillColor:[242,247,246]},
+    columnStyles:{0:{cellWidth:70},1:{cellWidth:26},2:{cellWidth:30},
+      3:{cellWidth:20,halign:'center'},4:{cellWidth:20,halign:'center'},5:{cellWidth:20,halign:'center'},
+      6:{cellWidth:22,halign:'right'},7:{cellWidth:28,halign:'right'},8:{cellWidth:24,halign:'right'}},
+    didParseCell: d => {
+      if(d.section==='body' && d.column.index===5 && d.cell.raw && d.cell.raw!=='0' && d.cell.raw!==0){
+        d.cell.styles.fontStyle='bold';
+        d.cell.styles.textColor = String(d.cell.raw).startsWith('-')?[166,27,27]:[122,74,0];
+      }
+    },
+    didDrawPage: d => {
+      doc.setFontSize(7.5); doc.setTextColor(140,140,140);
+      doc.text('Bollin Clinic Stock Manager — ' + stk.type + ' stocktake', 10, doc.internal.pageSize.getHeight()-6);
+      doc.text('Page ' + d.pageNumber, W-10, doc.internal.pageSize.getHeight()-6, {align:'right'});
+    }
+  });
+  doc.save(stk.type.replace(/[^A-Za-z]/g,'')+'_Stocktake_'+new Date().toISOString().slice(0,10)+'.pdf');
+  toast('Stocktake PDF downloaded');
+}
+
+/* ---------------- add / edit item ---------------- */
+let editItem = null;
+
+function fillSelect(sel, options, selected){
+  sel.innerHTML = '<option value="">—</option>' +
+    options.map(o=>`<option ${o===selected?'selected':''}>${o}</option>`).join('') +
+    '<option value="__new">＋ Add new…</option>';
+  if(selected && options.indexOf(selected)<0 && selected!=='')
+    sel.insertAdjacentHTML('beforeend', `<option selected>${selected}</option>`);
+}
+function populateAddSelects(tracker, cat, loc){
+  const cats = [...new Set(state.items.filter(i=>i.tracker===tracker && !i.obsolete)
+    .map(i=>i.cat).filter(Boolean))].sort();
+  fillSelect($('#adCat'), cats, cat||'');
+  fillSelect($('#adLoc'), allStoresFor(tracker), loc||'');
+}
+function plusOption(sel, what){
+  if(sel.value!=='__new') return;
+  const name = prompt('New '+what+' name:');
+  if(!name || !name.trim()){ sel.value=''; return; }
+  const v = name.trim();
+  sel.insertAdjacentHTML('beforeend', `<option>${v}</option>`);
+  sel.value = v;
+  if(what==='location' && can('stores') && LIVE){
+    api({action:'storeAdd', tracker:$('#adTracker').value, store:v}).catch(()=>{});
+  }
+}
+function openAdd(scannedCode){
+  editItem = null;
+  ['adName','adSup','adCode','adCost','adBatch','adExp'].forEach(id=>$('#'+id).value='');
+  $('#adUnit').value='Each'; $('#adQty').value=0; $('#adRo').value=1;
+  $('#adBar').value = scannedCode || '';
+  if(currentView in TRACKER_TAB) $('#adTracker').value = currentView;
+  $('#adTracker').disabled = false;
+  populateAddSelects($('#adTracker').value, '', '');
+  $('#adTracker').onchange = ()=>populateAddSelects($('#adTracker').value,
+    $('#adCat').value==='__new'?'':$('#adCat').value,
+    $('#adLoc').value==='__new'?'':$('#adLoc').value);
+  $('#addDlgTitle').textContent='Add new item'; $('#addDlgSave').textContent='Add item';
+  addDlg.showModal();
+  $('#adName').focus();
+}
+function openEdit(i){
+  const it = state.items[i];
+  editItem = it;
+  $('#adTracker').value = it.tracker; $('#adTracker').disabled = true;
+  populateAddSelects(it.tracker, it.cat||'', it.loc||'');
+  $('#adName').value=it.name; $('#adSup').value=it.supplier||'';
+  $('#adCode').value=it.code; $('#adBar').value=it.barcode;
+  $('#adUnit').value=it.unit; $('#adQty').value=it.qty; $('#adRo').value=it.reorder;
+  $('#adCost').value=it.cost!=null?it.cost:''; $('#adBatch').value=it.batch||'';
+  $('#adExp').value=it.expiry||'';
+  $('#addDlgTitle').textContent='Edit item'; $('#addDlgSave').textContent='Save changes';
+  addDlg.showModal();
+}
+async function saveNewItem(){
+  const name = $('#adName').value.trim();
+  if(!name){ toast('Name is required'); return; }
+  const tracker = $('#adTracker').value;
+  const catV = $('#adCat').value==='__new'?'':$('#adCat').value;
+  const locV = $('#adLoc').value==='__new'?'':$('#adLoc').value;
+  const vals = {
+    code:$('#adCode').value.trim(), barcode:$('#adBar').value.trim(),
+    name, cat:catV.trim(), supplier:$('#adSup').value.trim(),
+    loc:locV.trim(), unit:$('#adUnit').value.trim()||'Each',
+    qty:Math.max(0,parseInt($('#adQty').value||'0',10)),
+    reorder:Math.max(0,parseInt($('#adRo').value||'0',10)),
+    cost:$('#adCost').value?Number($('#adCost').value):null,
+    batch:$('#adBatch').value.trim(),
+    expiry:$('#adExp').value||null};
+  const fields = {Code:vals.code, Barcode:vals.barcode, Name:vals.name, Category:vals.cat,
+    Supplier:vals.supplier, Location:vals.loc, Unit:vals.unit, Qty:vals.qty,
+    ReorderLevel:vals.reorder, UnitCost:vals.cost, Batch:vals.batch, Expiry:vals.expiry};
+
+  if(editItem){                                    // ----- edit existing -----
+    Object.assign(editItem, vals);
+    addDlg.close(); render(); toast('Updated: '+name);
+    if(LIVE && editItem._row){
+      try{ await api({action:'updateItem', tracker:TRACKER_TAB[tracker],
+                      row:editItem._row, fields}); }
+      catch(err){ toast('Not saved to sheet — '+err.message); loadAll(); }
+    }
+    editItem = null;
+    return;
+  }
+                                                   // ----- add new -----
+  const it = Object.assign({tracker, _row:null,
+    status: tracker==='instruments'?'At Bollin':''}, vals);
+  if(!it.code && !it.barcode){ it.barcode = genCode(tracker); }
+  state.items.push(it);
+  if(it.barcode) state.barcodeLinks[it.barcode] = state.items.length-1;
+  addDlg.close();
+  toast('Added: '+name);
+  render();
+  if(LIVE){
+    try{
+      fields.Barcode = it.barcode; fields.Status = it.status;
+      await api({action:'addItem', tracker:TRACKER_TAB[tracker], fields});
+      loadAll();   // pick up the sheet row number
+    }catch(err){ toast('Not saved to sheet — '+err.message); }
+  }
+}
+
+/* ---------------- barcode generation & labels ---------------- */
+const CODE_PREFIX = {consumables:'CON',meds:'MED',garments:'GAR',instruments:'INS',linen:'LIN'};
+function genCode(tracker){
+  const pre = 'BC-' + (CODE_PREFIX[tracker]||'ITM') + '-';
+  let max = 0;
+  state.items.forEach(i=>{
+    [i.code,i.barcode].forEach(c=>{
+      if(c && String(c).startsWith(pre)){
+        const n = parseInt(String(c).slice(pre.length),10);
+        if(n>max) max=n;
+      }
+    });
+  });
+  return pre + String(max+1).padStart(4,'0');
+}
+
+const lbl = {tracker:'meds', missingOnly:true, format:'barcode'};
+function lblItems(){
+  const q = (window._lq||'').toLowerCase();
+  return state.items.filter(i => i.tracker===lbl.tracker &&
+    (!lbl.missingOnly || !i.barcode) &&
+    (!q || i.name.toLowerCase().includes(q) || (i.code||'').toLowerCase().includes(q)));
+}
+function labelsView(){
+  const trackers = ['consumables','meds','garments','instruments','linen'];
+  const items = lblItems();
+  const missing = state.items.filter(i=>i.tracker===lbl.tracker && !i.barcode).length;
+  const allSel = items.length && items.every(i=>selLbl.has(state.items.indexOf(i)));
+  const rows = items.slice(0,400).map(it=>{
+    const ix = state.items.indexOf(it);
+    return `<tr>
+      <td data-label="" style="display:flex;gap:10px;align-items:center">
+        <input type="checkbox" ${selLbl.has(ix)?'checked':''} onchange="toggleSel(selLbl,${ix})" style="width:18px;height:18px">
+        <strong>${it.name}</strong></td>
+      <td class="code" data-label="Code">${it.code||'—'}</td>
+      <td class="code" data-label="Barcode">${it.barcode||'<span style="color:var(--amber)">none</span>'}</td>
+      <td data-label="Location">${it.loc||'—'}</td>
+      <td class="rowbtns" data-label="">
+        <button onclick="printSingleLabel(${ix},'barcode')">Barcode</button>
+        <button onclick="printSingleLabel(${ix},'qr')">QR</button>
+        ${it.barcode?`<button onclick="removeLabel(${ix})" style="color:var(--red)" title="Delete this barcode so a new one can be generated">✕</button>`:''}</td></tr>`;
+  }).join('');
+  return `
+    <h1>Labels</h1>
+    <div class="sub">Generate Bollin codes for items without a barcode, then print labels to stick on shelves, boxes or bags.
+      Scanning a printed label works exactly like a manufacturer barcode.</div>
+    <div class="toolrow">
+      <select onchange="lbl.tracker=this.value;render()">
+        ${trackers.map(t=>`<option value="${t}" ${t===lbl.tracker?'selected':''}>${TRACKER_LABEL[t]}</option>`).join('')}
+      </select>
+      <select onchange="lbl.missingOnly=this.value==='1';render()">
+        <option value="1" ${lbl.missingOnly?'selected':''}>Without barcode only (${missing})</option>
+        <option value="0" ${!lbl.missingOnly?'selected':''}>All items</option>
+      </select>
+      <select onchange="lbl.format=this.value">
+        <option value="barcode" ${lbl.format==='barcode'?'selected':''}>Barcode (Code 128)</option>
+        <option value="qr" ${lbl.format==='qr'?'selected':''}>QR code</option>
+      </select>
+      <input type="search" placeholder="Search item…" value="${window._lq||''}"
+             oninput="window._lq=this.value;render()" style="flex:1;min-width:140px">
+    </div>
+    <div class="toolrow">
+      <button class="btn" onclick="assignCodes()">Generate codes for ${missing} item(s) without barcode</button>
+      <label style="display:flex;gap:8px;align-items:center;font-size:14px">
+        <input type="checkbox" ${allSel?'checked':''} onchange="selAllLbl(this.checked)" style="width:18px;height:18px">
+        Tick all shown
+      </label>
+      <button class="btn primary" onclick="labelSheetPDF('barcode')">Barcode sheet PDF (10/page) — ${selLbl.size} ticked</button>
+      <button class="btn primary" onclick="labelSheetPDF('qr')">QR sheet PDF (15/page) — ${selLbl.size} ticked</button>
+    </div>
+    ${tableForLabels(rows, items.length)}`;
+}
+function tableForLabels(rows, n){
+  return `<table><thead><tr><th>Item</th><th>Code</th><th>Barcode</th><th>Location</th><th>Print single</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="4" style="color:var(--ink-soft)">Nothing here — every item in this view has a barcode. Switch to "All items" to reprint labels.</td></tr>'}</tbody></table>
+    ${n>400?'<div class="sub">Showing first 400.</div>':''}`;
+}
+async function assignCodes(){
+  const targets = state.items.filter(i=>i.tracker===lbl.tracker && !i.barcode);
+  if(!targets.length){ toast('Every item here already has a barcode'); return; }
+  if(!confirm('Generate Bollin codes for '+targets.length+' item(s)?')) return;
+  const entries = [];
+  targets.forEach(it=>{
+    it.barcode = genCode(it.tracker);
+    state.barcodeLinks[it.barcode] = state.items.indexOf(it);
+    entries.push({tracker:TRACKER_TAB[it.tracker], code:it.code||it.name, barcode:it.barcode});
+  });
+  render();
+  toast(entries.length+' codes generated');
+  if(LIVE){
+    try{ await api({action:'setBarcodes', entries}); toast('Saved to sheet'); }
+    catch(err){ toast('Not saved to sheet — '+err.message); }
+  }
+}
+const selLbl = new Set();
+function selAllLbl(on){
+  selLbl.clear();
+  if(on) lblItems().forEach(i=>selLbl.add(state.items.indexOf(i)));
+  render();
+}
+async function removeLabel(ix){
+  const it = state.items[ix];
+  if(!confirm('Delete the barcode "'+it.barcode+'" from '+it.name+'? You can then generate or scan a new one.')) return;
+  const old = it.barcode;
+  it.barcode = '';
+  Object.keys(state.barcodeLinks).forEach(k=>{ if(k===old) delete state.barcodeLinks[k]; });
+  render(); toast('Barcode removed from '+it.name);
+  if(LIVE && it._row){
+    try{ await api({action:'clearBarcode', tracker:TRACKER_TAB[it.tracker], row:it._row, barcode:old}); }
+    catch(err){ it.barcode=old; toast('Not saved — '+err.message); render(); }
+  }
+}
+
+function makeSymbolDataUrl(code, format){
+  // returns {url, w, h} pixel dims
+  if(format==='qr'){
+    const holder = document.createElement('div');
+    new QRCode(holder, {text:String(code), width:220, height:220, correctLevel:QRCode.CorrectLevel.M});
+    const cv = holder.querySelector('canvas');
+    return {url: cv.toDataURL('image/png'), w:220, h:220};
+  }
+  const cv = document.createElement('canvas');
+  JsBarcode(cv, String(code), {format:'CODE128', displayValue:false, margin:4, height:90, width:2.2});
+  return {url: cv.toDataURL('image/png'), w:cv.width, h:cv.height};
+}
+
+async function labelSheetPDF(format){
+  const picked = [...selLbl].map(ix=>state.items[ix]).filter(Boolean);
+  if(!picked.length){ toast('Tick at least one item first'); return; }
+  // ensure every picked item has a code
+  const newCodes = [];
+  picked.forEach(it=>{
+    if(!it.barcode && !it.code){
+      it.barcode = genCode(it.tracker);
+      state.barcodeLinks[it.barcode] = state.items.indexOf(it);
+      newCodes.push({tracker:TRACKER_TAB[it.tracker], code:it.code||it.name, barcode:it.barcode});
+    }
+  });
+  if(newCodes.length && LIVE)
+    api({action:'setBarcodes', entries:newCodes}).catch(e=>toast('New codes not saved — '+e.message));
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+  const M = 10, W = 210, H = 297;
+  const cols = format==='qr' ? 3 : 2;
+  const rowsP = 5;                                   // 15/page for QR, 10/page for barcodes
+  const cw = (W - 2*M) / cols, ch = (H - 2*M) / rowsP;
+  const perPage = cols * rowsP;
+
+  picked.forEach((it, i)=>{
+    const p = i % perPage;
+    if(i > 0 && p === 0) doc.addPage();
+    const cx = M + (p % cols) * cw, cy = M + Math.floor(p / cols) * ch;
+    // dashed cut guide
+    doc.setDrawColor(190,190,190); doc.setLineDashPattern([1.4,1.4],0); doc.setLineWidth(0.15);
+    doc.rect(cx+1.5, cy+1.5, cw-3, ch-3);
+    doc.setLineDashPattern([],0);
+    const code = it.barcode || it.code;
+    // name (top, centred, wrapped to 2 lines)
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(23,37,31);
+    const nameLines = doc.splitTextToSize(it.name, cw-10).slice(0,2);
+    doc.text(nameLines, cx+cw/2, cy+8.5, {align:'center'});
+    // symbol (middle)
+    try{
+      const sym = makeSymbolDataUrl(code, format);
+      if(format==='qr'){
+        const s = Math.min(26, ch-26);
+        doc.addImage(sym.url,'PNG', cx+(cw-s)/2, cy+ch/2-s/2+1, s, s);
+      } else {
+        const bw = cw-16, bh = Math.min(16, ch-30);
+        doc.addImage(sym.url,'PNG', cx+8, cy+ch/2-bh/2+1.5, bw, bh);
+      }
+    }catch(e){}
+    // code number (bottom, centred)
+    doc.setFont('courier','normal'); doc.setFontSize(9); doc.setTextColor(60,60,60);
+    doc.text(String(code), cx+cw/2, cy+ch-6, {align:'center'});
+  });
+
+  doc.save((format==='qr'?'QR':'Barcode')+'_Labels_'+picked.length+'items_'+
+    new Date().toISOString().slice(0,10)+'.pdf');
+  toast('Label sheet downloaded — '+picked.length+' label(s), '+
+    Math.ceil(picked.length/perPage)+' page(s)');
+}
+
+function printSingleLabel(ix, format){
+  const it = state.items[ix];
+  if(!it) return;
+  let code = it.barcode || it.code;
+  if(!code){
+    if(!can('labels')){ toast('This item has no barcode yet — ask an admin to generate one'); return; }
+    code = genCode(it.tracker);
+    it.barcode = code;
+    state.barcodeLinks[code] = ix;
+    if(LIVE) api({action:'setBarcodes', entries:[{tracker:TRACKER_TAB[it.tracker],
+      code:it.code||it.name, barcode:code}]}).catch(e=>toast('Code not saved — '+e.message));
+    toast('Generated code '+code);
+  }
+  const area = $('#printArea');
+  area.innerHTML = `
+    <div style="display:flex;justify-content:center;padding-top:20mm">
+      <div class="label" style="width:80mm;padding:5mm;border:1.5px solid #999;border-radius:3mm">
+        <div class="ln" style="font-size:13pt;max-height:none;margin-bottom:2mm">${it.name}</div>
+        ${format==='qr' ? '<div class="qr" id="sqr" style="width:26mm;height:26mm"></div>'
+                        : '<svg id="sbc" style="height:18mm;max-width:70mm"></svg>'}
+        <div class="lc" style="font-size:11pt;letter-spacing:1px;margin-top:1.5mm">${code}</div>
+      </div>
+    </div>`;
+  try{
+    if(format==='qr'){
+      new QRCode(document.getElementById('sqr'), {text:String(code), width:98, height:98,
+        correctLevel:QRCode.CorrectLevel.M});
+      const q = document.getElementById('sqr');
+      setTimeout(()=>{ const c=q.querySelector('canvas,img'); if(c){c.style.width='26mm';c.style.height='26mm';} },50);
+    } else {
+      JsBarcode('#sbc', String(code), {format:'CODE128', displayValue:false, margin:0, height:60});
+    }
+  }catch(e){ toast('Could not draw the code'); return; }
+  setTimeout(()=>window.print(), 300);
+}
+
+function printLabels(){
+  const items = lblItems().filter(i=>i.barcode);
+  if(!items.length){ toast('No items with barcodes in this list'); return; }
+  const area = $('#printArea');
+  area.innerHTML = '<div class="labelgrid">' + items.map((it,ix)=>`
+    <div class="label">
+      <div class="ln">${it.name}</div>
+      ${lbl.format==='qr' ? `<div class="qr" id="qr${ix}"></div>` : `<svg id="bc${ix}"></svg>`}
+      <div class="lc">${it.barcode}</div>
+    </div>`).join('') + '</div>';
+  items.forEach((it,ix)=>{
+    try{
+      if(lbl.format==='qr') new QRCode(document.getElementById('qr'+ix),
+        {text:String(it.barcode), width:64, height:64, correctLevel:QRCode.CorrectLevel.M});
+      else JsBarcode('#bc'+ix, String(it.barcode),
+        {format:'CODE128', displayValue:false, margin:0, height:34});
+    }catch(e){}
+  });
+  setTimeout(()=>window.print(), 300);
+}
+
+/* ---------------- stock value explorer ---------------- */
+window._vSort = 'valueDesc';
+function valuesView(){
+  const trackers = ['','consumables','meds','garments','linen'];
+  const tf = window._vTracker||'';
+  let items = state.items.filter(i=>i.tracker!=='instruments' && !i.obsolete &&
+    (!tf || i.tracker===tf));
+  const q = (window._vq||'').toLowerCase();
+  if(q) items = items.filter(i=>i.name.toLowerCase().includes(q) || (i.supplier||'').toLowerCase().includes(q));
+  const val = i => i.cost!=null ? i.cost*i.qty : null;
+  const sorters = {
+    valueDesc:{l:'Value (high → low)', f:(a,b)=>(val(b)??-1)-(val(a)??-1)},
+    valueAsc:{l:'Value (low → high)', f:(a,b)=>(val(a)??Infinity)-(val(b)??Infinity)},
+    expiry:{l:'Expiring soon', f:(a,b)=>{const da=a.expiry?new Date(a.expiry):null,db=b.expiry?new Date(b.expiry):null;
+      if(!da&&!db)return 0; if(!da)return 1; if(!db)return -1; return da-db;}},
+    supplier:{l:'Supplier', f:(a,b)=>(a.supplier||'zzz').localeCompare(b.supplier||'zzz')},
+    qty:{l:'Quantity (high → low)', f:(a,b)=>b.qty-a.qty},
+    name:{l:'Name (A–Z)', f:(a,b)=>a.name.localeCompare(b.name)}
+  };
+  items.sort(sorters[window._vSort].f);
+  const total = items.reduce((s,i)=>s+(val(i)||0),0);
+  const costed = items.filter(i=>i.cost!=null).length;
+  const rows = items.slice(0,500).map(i=>`<tr>
+      <td data-label=""><strong>${i.name}</strong> <span class="code" style="font-family:var(--mono);font-size:11.5px">${i.code||''}</span></td>
+      <td data-label="Tracker">${TRACKER_LABEL[i.tracker]}</td>
+      <td data-label="Supplier">${i.supplier||'—'}</td>
+      <td data-label="Store">${i.loc||'—'}</td>
+      <td data-label="Expiry">${i.expiry?new Date(i.expiry).toLocaleDateString('en-GB'):'—'} ${expBadge(i)}</td>
+      <td class="qty" data-label="Qty">${i.qty} ${i.unit}</td>
+      <td class="qty" data-label="Unit cost">${i.cost!=null?'£'+i.cost.toFixed(2):'—'}</td>
+      <td class="qty" data-label="Value"><strong>${val(i)!=null?'£'+val(i).toFixed(2):'—'}</strong></td>
+    </tr>`).join('');
+  return `<h1>Stock value</h1>
+    <div class="sub">Total <strong>£${total.toFixed(2)}</strong> across ${items.length} items (${costed} costed). Sort and filter to explore.</div>
+    <div class="toolrow">
+      <select onchange="window._vTracker=this.value;render()">
+        ${trackers.map(t=>`<option value="${t}" ${t===tf?'selected':''}>${t?TRACKER_LABEL[t]:'All trackers'}</option>`).join('')}
+      </select>
+      <select onchange="window._vSort=this.value;render()">
+        ${Object.keys(sorters).map(k=>`<option value="${k}" ${k===window._vSort?'selected':''}>${sorters[k].l}</option>`).join('')}
+      </select>
+      <input type="search" placeholder="Search item or supplier…" value="${window._vq||''}"
+             oninput="window._vq=this.value;refreshValues()">
+    </div>
+    <div id="valWrap"><table><thead><tr><th>Item</th><th>Tracker</th><th>Supplier</th><th>Store</th>
+      <th>Expiry</th><th class="qty">Qty</th><th class="qty">Unit cost</th><th class="qty">Value</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="8" style="color:var(--ink-soft)">Nothing matches.</td></tr>'}</tbody></table></div>`;
+}
+function refreshValues(){
+  const el = document.getElementById('valWrap');
+  if(!el || currentView!=='values') return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = valuesView();
+  const fresh = tmp.querySelector('#valWrap');
+  if(fresh) el.innerHTML = fresh.innerHTML;
+}
+
+/* ---------------- obsolete (dead) stock — admin only ---------------- */
+async function markObsolete(ix){
+  const it = state.items[ix];
+  if(!confirm('Move "'+it.name+'" to obsolete stock? It will disappear from all lists and alerts, but stays saved and can be restored anytime.')) return;
+  it.obsolete = true; render();
+  toast('Moved to obsolete: '+it.name);
+  if(LIVE && it._row){
+    try{ await api({action:'updateItem', tracker:TRACKER_TAB[it.tracker], row:it._row,
+                    fields:{Obsolete:'yes'}}); }
+    catch(err){ it.obsolete=false; toast('Not saved — '+err.message); render(); }
+  }
+}
+async function restoreItem(ix){
+  const it = state.items[ix];
+  it.obsolete = false; render();
+  toast('Restored: '+it.name);
+  if(LIVE && it._row){
+    try{ await api({action:'updateItem', tracker:TRACKER_TAB[it.tracker], row:it._row,
+                    fields:{Obsolete:''}}); }
+    catch(err){ it.obsolete=true; toast('Not saved — '+err.message); render(); }
+  }
+}
+function obsoleteView(){
+  const items = state.items.map((it,ix)=>({it,ix})).filter(x=>x.it.obsolete);
+  const rows = items.map(({it,ix})=>`<tr>
+      <td data-label=""><strong>${it.name}</strong> <span class="code" style="font-family:var(--mono);font-size:11.5px">${it.code||''}</span></td>
+      <td data-label="Tracker">${TRACKER_LABEL[it.tracker]}</td>
+      <td data-label="Category">${it.cat||'—'}</td>
+      <td class="qty" data-label="Qty">${it.qty}</td>
+      <td class="rowbtns" data-label=""><button onclick="restoreItem(${ix})">Restore</button></td></tr>`).join('');
+  return `<h1>Obsolete stock</h1>
+    <div class="sub">Dead stock kept out of the way — no alerts, no low-stock lists, hidden from trackers. Restore anytime if needed again. Mark items obsolete from the "Obsolete" button on any tracker row.</div>
+    <table><thead><tr><th>Item</th><th>Tracker</th><th>Category</th><th class="qty">Qty</th><th></th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="5" style="color:var(--ink-soft)">Nothing marked obsolete.</td></tr>'}</tbody></table>`;
+}
+
+/* ---------------- stores & transfers — admin only ---------------- */
+const selMove = new Set();
+function allStoresFor(tracker){
+  const fromItems = state.items.filter(i=>i.tracker===tracker && !i.obsolete)
+    .map(i=>i.loc).filter(Boolean);
+  const managed = (state.stores||[]).filter(s=>s.tracker===tracker).map(s=>s.store);
+  return [...new Set([...fromItems, ...managed])].sort();
+}
+function storesView(){
+  const trackers = ['consumables','meds','garments','instruments','linen'];
+  const t = window._sTracker || 'consumables';
+  const stores = allStoresFor(t);
+  const managed = (state.stores||[]).filter(s=>s.tracker===t);
+  const q = (window._sq||'').toLowerCase();
+  const cats = [...new Set(state.items.filter(i=>i.tracker===t && !i.obsolete).map(i=>i.cat).filter(Boolean))].sort();
+  const cf = window._sCat||'', sf = window._sStore||'';
+  const items = state.items.map((it,ix)=>({it,ix})).filter(x=>x.it.tracker===t && !x.it.obsolete &&
+    (!q || x.it.name.toLowerCase().includes(q) || (x.it.code||'').toLowerCase().includes(q)) &&
+    (!cf || x.it.cat===cf) && (!sf || x.it.loc===sf));
+  const allSel = items.length && items.every(x=>selMove.has(x.ix));
+  const rows = items.slice(0,400).map(({it,ix})=>`<tr>
+      <td data-label="" style="display:flex;gap:10px;align-items:center">
+        <input type="checkbox" ${selMove.has(ix)?'checked':''} onchange="toggleSel(selMove,${ix})" style="width:18px;height:18px">
+        <span><strong>${it.name}</strong> <span class="code" style="font-family:var(--mono);font-size:11.5px">${it.code||''}</span></span></td>
+      <td data-label="Category">${it.cat||'—'}</td>
+      <td class="qty" data-label="Qty">${it.qty}</td>
+      <td data-label="Current store">${it.loc||'—'}</td></tr>`).join('');
+  const storeRows = stores.map(s=>{
+    const cnt = state.items.filter(i=>i.tracker===t && !i.obsolete && i.loc===s).length;
+    const m = managed.find(x=>x.store===s);
+    return `<span style="display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:99px;padding:5px 12px;font-size:13px;background:var(--card)">
+      ${s} <span style="color:var(--ink-soft)">(${cnt})</span>
+      ${m&&cnt===0?`<a href="#" onclick="removeStore(${m._row});return false" style="color:var(--red);font-weight:700" title="Remove empty store">×</a>`:''}
+    </span>`;
+  }).join(' ');
+  return `<h1>Stores & transfers</h1>
+    <div class="sub">Add or remove stores and move stock between them. Only empty managed stores can be removed (×).</div>
+    <div class="toolrow">
+      <select onchange="window._sTracker=this.value;window._sStore='';window._sCat='';selMove.clear();render()">
+        ${trackers.map(x=>`<option value="${x}" ${x===t?'selected':''}>${TRACKER_LABEL[x]}</option>`).join('')}
+      </select>
+      <input id="newStore" type="text" placeholder="New store name…" style="padding:9px 10px;border:1px solid var(--line);border-radius:8px">
+      <button class="btn" onclick="addStore()">＋ Add store</button>
+    </div>
+    <div style="margin-bottom:16px;line-height:2.3">${storeRows||'<span style="color:var(--ink-soft)">No stores yet.</span>'}</div>
+    <h1 style="font-size:16px">Move stock between stores</h1>
+    <div class="toolrow">
+      <input type="search" placeholder="Search…" value="${window._sq||''}" oninput="window._sq=this.value;render()">
+      <select onchange="window._sCat=this.value;render()">
+        <option value="">All categories</option>
+        ${cats.map(x=>`<option ${x===cf?'selected':''}>${x}</option>`).join('')}
+      </select>
+      <select onchange="window._sStore=this.value;render()">
+        <option value="">From: all stores</option>
+        ${stores.map(x=>`<option ${x===sf?'selected':''}>${x}</option>`).join('')}
+      </select>
+    </div>
+    <div class="toolrow">
+      <label style="display:flex;gap:8px;align-items:center;font-size:14px">
+        <input type="checkbox" ${allSel?'checked':''} onchange="selAllMove(this.checked)" style="width:18px;height:18px">
+        Tick all shown (${items.length})
+      </label>
+      <select id="moveDest" style="padding:9px 10px;border:1px solid var(--line);border-radius:8px">
+        <option value="">Move to…</option>
+        ${stores.map(x=>`<option>${x}</option>`).join('')}
+      </select>
+      <button class="btn primary" onclick="doMoveStore()">Move ${selMove.size||''} ticked item(s)</button>
+    </div>
+    <table><thead><tr><th>Item</th><th>Category</th><th class="qty">Qty</th><th>Current store</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="4" style="color:var(--ink-soft)">Nothing matches.</td></tr>'}</tbody></table>`;
+}
+function selAllMove(on){
+  selMove.clear();
+  if(on){
+    const t = window._sTracker||'consumables';
+    const q = (window._sq||'').toLowerCase(), cf = window._sCat||'', sf = window._sStore||'';
+    state.items.forEach((it,ix)=>{
+      if(it.tracker===t && !it.obsolete &&
+        (!q || it.name.toLowerCase().includes(q) || (it.code||'').toLowerCase().includes(q)) &&
+        (!cf || it.cat===cf) && (!sf || it.loc===sf)) selMove.add(ix);
+    });
+  }
+  render();
+}
+async function addStore(){
+  const name = $('#newStore').value.trim();
+  if(!name){ toast('Type a store name first'); return; }
+  const t = window._sTracker||'consumables';
+  state.stores = state.stores||[];
+  state.stores.push({_row:null, tracker:t, store:name});
+  render(); toast('Store added: '+name);
+  if(LIVE){
+    try{ await api({action:'storeAdd', tracker:t, store:name}); loadAll(); }
+    catch(err){ toast('Not saved — '+err.message); }
+  }
+}
+async function removeStore(row){
+  if(!confirm('Remove this empty store from the list?')) return;
+  state.stores = (state.stores||[]).filter(s=>s._row!==row);
+  render();
+  if(LIVE && row){
+    try{ await api({action:'storeRemove', row}); loadAll(); }
+    catch(err){ toast('Not saved — '+err.message); loadAll(); }
+  }
+}
+async function doMoveStore(){
+  const dest = $('#moveDest').value;
+  if(!dest){ toast('Choose a destination store'); return; }
+  const t = window._sTracker||'consumables';
+  const picked = [...selMove].map(ix=>state.items[ix]).filter(i=>i && i.tracker===t);
+  if(!picked.length){ toast('Tick at least one item'); return; }
+  picked.forEach(i=>i.loc=dest);
+  const rows = picked.map(i=>i._row).filter(Boolean);
+  selMove.clear(); render();
+  toast(picked.length+' item(s) moved to '+dest);
+  if(LIVE){
+    try{ await api({action:'moveStore', tracker:TRACKER_TAB[t], rows, toStore:dest}); }
+    catch(err){ toast('Not saved — '+err.message); loadAll(); }
+  }
+}
+
+/* ---------------- gas room daily checks ---------------- */
+state.gasChecks = state.gasChecks || [];
+const gas = {   // today's form state (kept outside render so typing survives)
+  o2L:'', o2R:'', o2P:'', o2Use:'', o2Deliv:false,
+  airL:'', airR:'', airP:'', airUse:'', airDeliv:false, airRecord:false,
+  heT:null, heF:null, heE:null,
+  trT:null, trF:null, trE:null, trDate:'',
+  pump:'', pumpStatus:'Normal', af1:false, af2:false, notes:''
+};
+
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function gasDoneToday(){
+  return state.gasChecks.some(g=>String(g.date).slice(0,10)===todayISO());
+}
+function lastGas(){ return state.gasChecks.length ? state.gasChecks[state.gasChecks.length-1] : null; }
+function gasPrefill(){
+  const l = lastGas();
+  if(!l) return;
+  if(gas.heT==null){ gas.heT=l.heT; gas.heF=l.heF; gas.heE=l.heE; }
+  if(gas.trT==null){ gas.trT=l.trT; gas.trF=l.trF; gas.trE=l.trE; gas.trDate=l.trDate?String(l.trDate).slice(0,10):''; }
+  if(!gas.o2Use) gas.o2Use = l.o2Use||'';
+  if(!gas.airUse) gas.airUse = l.airUse||'';
+  if(!gas.pump) gas.pump = l.pump||'1';
+}
+
+function digCls(v, full){
+  const n = Number(v);
+  if(v==='' || isNaN(n)) return '';
+  if(n >= full*0.6) return 'ok';
+  if(n >= 25) return 'warn';
+  return 'crit';
+}
+function paintDig(id, full){
+  const el = document.getElementById(id);
+  if(el) el.className = 'digital ' + digCls(el.value, full);
+}
+function anyLow(a,b){
+  const x=Number(a), y=Number(b);
+  return (a!=='' && !isNaN(x) && x<25) || (b!=='' && !isNaN(y) && y<25);
+}
+function paintDeliv(prefix){
+  const el = document.getElementById(prefix+'DelivBox');
+  if(!el) return;
+  const low = prefix==='o2' ? anyLow(gas.o2L,gas.o2R) : anyLow(gas.airL,gas.airR);
+  const on = prefix==='o2' ? gas.o2Deliv : gas.airDeliv;
+  el.className = 'deliv' + (on?' on':(low?' needed':''));
+  el.querySelector('.dtxt').textContent = on ? '✓ Delivery slot booked'
+    : low ? '⚠ Bank low / empty — tick when delivery slot is booked' : 'Delivery slot booked (tick if needed)';
+}
+
+function manifoldHTML(prefix, title, full, pipeNominal, dueBadge, collapsed){
+  const g = gas;
+  const L = prefix==='o2'?g.o2L:g.airL, R = prefix==='o2'?g.o2R:g.airR, P = prefix==='o2'?g.o2P:g.airP;
+  const use = prefix==='o2'?g.o2Use:g.airUse;
+  const body = `
+    <div class="manifold">
+      <div class="bank ${use==='Left'?'inuse':''}" id="${prefix}BankL">
+        <div class="bl">Left bank ${use==='Left'?'· IN USE':''}</div>
+        <input class="digital ${digCls(L,full)}" id="${prefix}L" inputmode="numeric" placeholder="---" maxlength="3"
+          value="${L}" oninput="gas.${prefix==='o2'?'o2L':'airL'}=this.value;paintDig('${prefix}L',${full});paintDeliv('${prefix}')">
+        <div class="bankpick">
+          <button type="button" class="${use==='Left'?'on':''}" onclick="setBank('${prefix}','Left')">IN USE</button>
+          <button type="button" class="${use==='Right'?'on':''}" onclick="setBank('${prefix}','Right')" style="border-left:1px solid #37464B">STANDBY</button>
+        </div>
+      </div>
+      <div class="pipeline">
+        <div class="bl">Pipeline (bar)</div>
+        <input class="digital ok" id="${prefix}P" inputmode="decimal" placeholder="${pipeNominal}" maxlength="4"
+          value="${P}" oninput="gas.${prefix==='o2'?'o2P':'airP'}=this.value">
+        <div class="bl">nominal ~${pipeNominal}</div>
+      </div>
+      <div class="bank ${use==='Right'?'inuse':''}" id="${prefix}BankR">
+        <div class="bl">Right bank ${use==='Right'?'· IN USE':''}</div>
+        <input class="digital ${digCls(R,full)}" id="${prefix}R" inputmode="numeric" placeholder="---" maxlength="3"
+          value="${R}" oninput="gas.${prefix==='o2'?'o2R':'airR'}=this.value;paintDig('${prefix}R',${full});paintDeliv('${prefix}')">
+        <div class="bankpick">
+          <button type="button" class="${use==='Right'?'on':''}" onclick="setBank('${prefix}','Right')">IN USE</button>
+          <button type="button" class="${use==='Left'?'on':''}" onclick="setBank('${prefix}','Left')" style="border-left:1px solid #37464B">STANDBY</button>
+        </div>
+      </div>
+    </div>
+    <div class="deliv" id="${prefix}DelivBox" onclick="toggleDeliv('${prefix}')">
+      <span style="font-size:18px">🚚</span><span class="dtxt"></span>
+    </div>`;
+  return `<div class="gaspanel">
+    <h2><span class="led green"></span>${title} ${dueBadge||''}</h2>
+    ${collapsed ? `<div id="${prefix}Collapsed">
+        <button class="btn" onclick="gas.airRecord=true;render()">Not due today — tap to record anyway</button>
+      </div>` : body}
+  </div>`;
+}
+function setBank(prefix, side){
+  if(prefix==='o2') gas.o2Use = side; else gas.airUse = side;
+  render();
+}
+function toggleDeliv(prefix){
+  if(prefix==='o2') gas.o2Deliv = !gas.o2Deliv; else gas.airDeliv = !gas.airDeliv;
+  paintDeliv(prefix);
+}
+function stepperHTML(id, label, field){
+  return `<div class="fld"><label>${label}</label>
+    <div class="stepper">
+      <button type="button" onclick="gasStep('${field}',-1,'${id}')">−</button>
+      <input id="${id}" inputmode="numeric" value="${gas[field]==null?'':gas[field]}"
+        oninput="gas.${field}=this.value===''?null:Math.max(0,parseInt(this.value)||0)">
+      <button type="button" onclick="gasStep('${field}',1,'${id}')">＋</button>
+    </div></div>`;
+}
+function gasStep(field, d, id){
+  gas[field] = Math.max(0, (Number(gas[field])||0) + d);
+  const el = document.getElementById(id);
+  if(el) el.value = gas[field];
+}
+
+function gasView(){
+  gasPrefill();
+  const isMon = new Date().getDay()===1;
+  const airDue = isMon || gas.airRecord;
+  const done = gasDoneToday();
+  const l = lastGas();
+  return `
+    <h1>Gas room — daily checks</h1>
+    <div class="sub">One walk-through: oxygen · medical air (Mondays) · helium · trolley O₂ · vacuum plant · theatre airflow.</div>
+    ${done?`<div class="gasdone"><span class="led green"></span>Today's check is already recorded${l&&l.by?' by '+l.by:''} — submitting again adds a second entry.</div>`:''}
+
+    ${manifoldHTML('o2','Oxygen manifold — big cylinders (3 + 3)',142,'4.2','',false)}
+    ${manifoldHTML('air','Medical air manifold','108','7.3',
+        `<span class="due">${isMon?'Due today (Monday)':'Weekly · Mondays'}</span>`, !airDue)}
+
+    <div class="gaspanel">
+      <h2><span class="led green"></span>Helium cylinders (Renuvion)</h2>
+      <div class="steprow">
+        ${stepperHTML('heT','Total on site','heT')}
+        ${stepperHTML('heF','Full','heF')}
+        ${stepperHTML('heE','Empty','heE')}
+      </div>
+    </div>
+
+    <div class="gaspanel">
+      <h2><span class="led green"></span>Trolley oxygen cylinders (CD size)</h2>
+      <div class="steprow">
+        ${stepperHTML('trT','Total on site','trT')}
+        ${stepperHTML('trF','Full','trF')}
+        ${stepperHTML('trE','Empty','trE')}
+        <div class="fld"><label>Next delivery</label>
+          <input type="date" value="${gas.trDate||''}" oninput="gas.trDate=this.value"
+            style="height:46px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font-size:15px"></div>
+      </div>
+    </div>
+
+    <div class="gaspanel">
+      <h2><span class="led ${gas.pumpStatus==='Normal'?'green':gas.pumpStatus==='Both fault'?'red':'amber'}"></span>Vacuum plant</h2>
+      <div class="steprow">
+        <div class="fld"><label>Duty pump</label>
+          <div class="bankpick" style="border-color:var(--line);width:180px">
+            <button type="button" class="${gas.pump==='1'?'on':''}" style="background:${gas.pump==='1'?'':'var(--mist)'};color:${gas.pump==='1'?'':'var(--ink-soft)'}" onclick="gas.pump='1';render()">PUMP 1</button>
+            <button type="button" class="${gas.pump==='2'?'on':''}" style="background:${gas.pump==='2'?'':'var(--mist)'};color:${gas.pump==='2'?'':'var(--ink-soft)'};border-left:1px solid var(--line)" onclick="gas.pump='2';render()">PUMP 2</button>
+          </div></div>
+        <div class="fld"><label>Plant status</label>
+          <select onchange="gas.pumpStatus=this.value;render()"
+            style="height:46px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font-size:15px">
+            <option ${gas.pumpStatus==='Normal'?'selected':''}>Normal</option>
+            <option ${gas.pumpStatus==='Pump 1 fault — Pump 2 running'?'selected':''}>Pump 1 fault — Pump 2 running</option>
+            <option ${gas.pumpStatus==='Pump 2 fault — Pump 1 running'?'selected':''}>Pump 2 fault — Pump 1 running</option>
+            <option ${gas.pumpStatus==='Both fault'?'selected':''}>Both fault</option>
+          </select></div>
+      </div>
+    </div>
+
+    <div class="gaspanel">
+      <h2><span class="led ${gas.af1&&gas.af2?'green':'amber'}"></span>Theatre airflow — end of day</h2>
+      <div class="steprow">
+        <div class="bigtoggle ${gas.af1?'on':''}" onclick="gas.af1=!gas.af1;render()">
+          <div class="tsw"></div><div><strong>Theatre 1</strong><div style="font-size:12px;color:var(--ink-soft)">Airflow switched OFF</div></div></div>
+        <div class="bigtoggle ${gas.af2?'on':''}" onclick="gas.af2=!gas.af2;render()">
+          <div class="tsw"></div><div><strong>Theatre 2</strong><div style="font-size:12px;color:var(--ink-soft)">Airflow switched OFF</div></div></div>
+      </div>
+    </div>
+
+    <div class="toolrow">
+      <input type="text" placeholder="Notes (optional)" value="${gas.notes||''}" oninput="gas.notes=this.value"
+        style="flex:1;min-width:180px;padding:11px 13px;border:1px solid var(--line);border-radius:10px">
+      <button class="btn primary" style="padding:13px 26px;font-size:15px" onclick="saveGasCheck()">✓ Save today's checks</button>
+    </div>
+
+    ${gasConsumptionHTML()}
+    ${gasHistoryHTML()}`;
+}
+
+async function saveGasCheck(){
+  if(gas.o2L==='' && gas.o2R===''){ toast('Enter the oxygen bank readings first'); return; }
+  if(!gas.o2Use){ toast('Select which oxygen bank is in use'); return; }
+  const fields = {Date: todayISO(), By: myName||'Unknown',
+    O2_LeftBank:gas.o2L, O2_RightBank:gas.o2R, O2_Pipeline:gas.o2P, O2_InUseBank:gas.o2Use,
+    O2_DeliveryBooked: gas.o2Deliv?'Yes':'',
+    Air_LeftBank:gas.airL, Air_RightBank:gas.airR, Air_Pipeline:gas.airP, Air_InUseBank:gas.airUse,
+    Air_DeliveryBooked: gas.airDeliv?'Yes':'',
+    Helium_Total:gas.heT??'', Helium_Full:gas.heF??'', Helium_Empty:gas.heE??'',
+    TrolleyO2_Total:gas.trT??'', TrolleyO2_Full:gas.trF??'', TrolleyO2_Empty:gas.trE??'',
+    TrolleyO2_NextDelivery:gas.trDate||'',
+    Vacuum_DutyPump:gas.pump, Vacuum_Status:gas.pumpStatus,
+    Airflow_TH1_Off: gas.af1?'Yes':'No', Airflow_TH2_Off: gas.af2?'Yes':'No', Notes:gas.notes||''};
+  state.gasChecks.push({date:todayISO(), by:fields.By,
+    o2L:gas.o2L, o2R:gas.o2R, o2P:gas.o2P, o2Use:gas.o2Use, o2Deliv:gas.o2Deliv,
+    airL:gas.airL, airR:gas.airR, airP:gas.airP, airUse:gas.airUse, airDeliv:gas.airDeliv,
+    heT:gas.heT, heF:gas.heF, heE:gas.heE, trT:gas.trT, trF:gas.trF, trE:gas.trE, trDate:gas.trDate,
+    pump:gas.pump, pumpStatus:gas.pumpStatus, af1:gas.af1, af2:gas.af2});
+  toast('Gas room checks saved ✓');
+  ['o2L','o2R','o2P','airL','airR','airP','notes'].forEach(k=>gas[k]='');
+  gas.o2Deliv=false; gas.airDeliv=false; gas.airRecord=false; gas.af1=false; gas.af2=false;
+  render();
+  if(LIVE){
+    try{ await api({action:'gasCheckAdd', fields}); loadAll(); }
+    catch(err){ toast('Not saved to sheet — '+err.message); }
+  }
+}
+
+/* --- monthly consumption from daily readings --- */
+function gasConsumption(prefix, full){
+  // sum of pressure drops per bank between consecutive checks; a rise >50 = fresh cylinders (changeover)
+  const byMonth = {};
+  const rows = state.gasChecks
+    .filter(g=>g[prefix+'L']!=='' || g[prefix+'R']!=='')
+    .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  for(let i=1;i<rows.length;i++){
+    const m = String(rows[i].date).slice(0,7);
+    byMonth[m] = byMonth[m] || {drop:0, swaps:0};
+    ['L','R'].forEach(s=>{
+      const prev = Number(rows[i-1][prefix+s]), cur = Number(rows[i][prefix+s]);
+      if(isNaN(prev)||isNaN(cur)) return;
+      if(cur < prev) byMonth[m].drop += prev-cur;
+      else if(cur - prev > 50) byMonth[m].swaps++;
+    });
+  }
+  return Object.keys(byMonth).sort().reverse().slice(0,6).map(m=>({month:m,
+    drop:byMonth[m].drop, swaps:byMonth[m].swaps,
+    cyl: Math.round(byMonth[m].drop / full * 3 * 10)/10 }));   // 3 cylinders per bank
+}
+function gasConsumptionHTML(){
+  const o2 = gasConsumption('o2', 142), air = gasConsumption('air', 108);
+  if(!o2.length && !air.length) return '';
+  const fm = m => new Date(m+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+  const rows = [...new Set([...o2.map(x=>x.month), ...air.map(x=>x.month)])].sort().reverse().map(m=>{
+    const a = o2.find(x=>x.month===m), b = air.find(x=>x.month===m);
+    return `<tr><td data-label="">${fm(m)}</td>
+      <td class="qty" data-label="O₂ bar used">${a?a.drop:'—'}</td>
+      <td class="qty" data-label="O₂ est. cylinders">${a?'≈ '+a.cyl:'—'}</td>
+      <td class="qty" data-label="O₂ changeovers">${a?a.swaps:'—'}</td>
+      <td class="qty" data-label="Air bar used">${b?b.drop:'—'}</td>
+      <td class="qty" data-label="Air est. cylinders">${b?'≈ '+b.cyl:'—'}</td></tr>`;
+  }).join('');
+  return `<h1 style="font-size:16px;margin-top:24px">Monthly consumption — big cylinders</h1>
+    <div class="sub">Calculated from the recorded bank pressures (a pressure rise of 50+ counts as a cylinder changeover). Estimated cylinders = pressure used ÷ full pressure × 3 per bank.</div>
+    <table><thead><tr><th>Month</th><th class="qty">O₂ bar used</th><th class="qty">O₂ ≈ cylinders</th>
+      <th class="qty">O₂ changeovers</th><th class="qty">Air bar used</th><th class="qty">Air ≈ cylinders</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+function gasHistoryHTML(){
+  const rows = [...state.gasChecks].reverse().slice(0,14).map(g=>`<tr>
+    <td data-label="">${new Date(g.date).toLocaleDateString('en-GB')} · ${g.by||''}</td>
+    <td class="qty" data-label="O₂ L/R">${g.o2L||'—'} / ${g.o2R||'—'}</td>
+    <td class="qty" data-label="Air L/R">${g.airL!==''&&g.airL!=null?g.airL+' / '+g.airR:'—'}</td>
+    <td class="qty" data-label="He F/E">${g.heF??'—'} / ${g.heE??'—'}</td>
+    <td class="qty" data-label="Trolley F/E">${g.trF??'—'} / ${g.trE??'—'}</td>
+    <td data-label="Pumps">${g.pumpStatus||'—'} (P${g.pump||'?'})</td>
+    <td data-label="Airflow off">${g.af1&&g.af2?'✓ Both':g.af1?'TH1 only':g.af2?'TH2 only':'—'}</td></tr>`).join('');
+  if(!rows) return '';
+  return `<h1 style="font-size:16px;margin-top:24px">Recent checks</h1>
+    <table><thead><tr><th>Date</th><th class="qty">O₂ L/R</th><th class="qty">Air L/R</th>
+      <th class="qty">He full/empty</th><th class="qty">Trolley full/empty</th><th>Vacuum</th><th>Airflow off</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+/* ---------------- assets (admin only) ---------------- */
+state.assets = state.assets || [];
+let editAsset = null;
+const ASSET_STATUS_CLS = s =>
+  s==='Working' ? 'b-ok' :
+  (s==='Decommissioned') ? 'b-out' :
+  (s==='Standby / Backup' || s==='Scheduled for Service' || s==='In Calibration') ? 'b-exp' : 'b-low';
+
+function maintDays(a){ return a.next ? Math.round((new Date(a.next)-new Date())/86400000) : null; }
+
+function assetsView(){
+  const q = (window._aq||'').toLowerCase();
+  const list = state.assets.filter(a=>!q || a.name.toLowerCase().includes(q) ||
+    (a.serial||'').toLowerCase().includes(q) || (a.loc||'').toLowerCase().includes(q));
+  list.sort((a,b)=>{
+    const da=maintDays(a), db=maintDays(b);
+    if(da==null&&db==null) return a.name.localeCompare(b.name);
+    if(da==null) return 1; if(db==null) return -1; return da-db;
+  });
+  const due = state.assets.filter(a=>{const d=maintDays(a); return d!=null && d<=30;});
+  const banner = due.length ? `<div class="note" style="background:var(--red-bg);border-color:#E5B5B0;color:var(--red)">
+      <strong>${due.length} asset(s) due maintenance within 30 days:</strong>
+      ${due.map(a=>a.name).join(' · ')}</div>` : '';
+  const fmt = d => d? new Date(d).toLocaleDateString('en-GB') : '—';
+  const rows = list.map(a=>{
+    const ix = state.assets.indexOf(a);
+    const d = maintDays(a);
+    const dueBadge = d==null?'—': d<0?`<span class="badge b-out">Overdue ${-d}d</span>`
+      : d<=30?`<span class="badge b-low">${fmt(a.next)} · ${d}d</span>` : fmt(a.next);
+    return `<tr style="${d!=null&&d<=30?'background:#FFF7F0':''}">
+      <td data-label=""><strong>${a.name}</strong> <span class="code" style="font-family:var(--mono);font-size:11.5px">${a.serial||''}</span></td>
+      <td data-label="Function">${a.func||'—'}</td>
+      <td data-label="Location">${a.loc||'—'}</td>
+      <td data-label="Supplier">${a.supplier||'—'}${a.phone?'<div style="font-size:11.5px;color:var(--ink-soft)">'+a.phone+'</div>':''}</td>
+      <td data-label="Last maint.">${fmt(a.last)}</td>
+      <td data-label="Next due">${dueBadge}</td>
+      <td data-label="Status"><span class="badge ${ASSET_STATUS_CLS(a.status)}">${a.status}</span></td>
+      <td class="rowbtns" data-label=""><button onclick="openAsset(${ix})">Edit</button></td>
+    </tr>`;
+  }).join('');
+  return `<h1>Assets</h1>
+    <div class="sub">Machines and equipment — maintenance schedule and status. Due-soon items sort to the top.</div>
+    ${banner}
+    <div class="toolrow">
+      <button class="btn primary" onclick="openAsset(null)">＋ Add asset</button>
+      <input type="search" placeholder="Search name, serial or location…" value="${window._aq||''}"
+             oninput="window._aq=this.value;render()">
+      <button class="btn" onclick="assetReportPDF()">Download PDF report</button>
+    </div>
+    <table><thead><tr><th>Asset</th><th>Function</th><th>Location</th><th>Supplier</th>
+      <th>Last maint.</th><th>Next due</th><th>Status</th><th></th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="8" style="color:var(--ink-soft)">No assets yet — add your machines above.</td></tr>'}</tbody></table>`;
+}
+
+function openAsset(ix){
+  editAsset = ix!=null ? state.assets[ix] : null;
+  const a = editAsset || {};
+  $('#asName').value=a.name||''; $('#asSerial').value=a.serial||'';
+  $('#asFunc').value=a.func||''; $('#asSup').value=a.supplier||'';
+  $('#asPhone').value=a.phone||''; $('#asLoc').value=a.loc||'';
+  $('#asLast').value=a.last?String(a.last).slice(0,10):'';
+  $('#asNext').value=a.next?String(a.next).slice(0,10):'';
+  $('#asStatus').value=a.status||'Working'; $('#asNotes').value=a.notes||'';
+  $('#assetDlgTitle').textContent = editAsset?'Edit asset':'Add asset';
+  $('#assetDlgSave').textContent = editAsset?'Save changes':'Add asset';
+  assetDlg.showModal(); $('#asName').focus();
+}
+async function saveAsset(){
+  const name = $('#asName').value.trim();
+  if(!name){ toast('Name is required'); return; }
+  const vals = {name, serial:$('#asSerial').value.trim(), func:$('#asFunc').value.trim(),
+    supplier:$('#asSup').value.trim(), phone:$('#asPhone').value.trim(), loc:$('#asLoc').value.trim(),
+    last:$('#asLast').value||null, next:$('#asNext').value||null,
+    status:$('#asStatus').value, notes:$('#asNotes').value.trim()};
+  const fields = {Name:vals.name, SerialNumber:vals.serial, Function:vals.func,
+    Supplier:vals.supplier, SupplierContact:vals.phone, Location:vals.loc,
+    LastMaintenance:vals.last, NextMaintenanceDue:vals.next, Status:vals.status, Notes:vals.notes};
+  if(editAsset){
+    Object.assign(editAsset, vals);
+    assetDlg.close(); render(); toast('Updated: '+name);
+    if(LIVE && editAsset._row){
+      try{ await api({action:'assetUpdate', row:editAsset._row, fields}); }
+      catch(err){ toast('Not saved — '+err.message); loadAll(); }
+    }
+    editAsset=null; return;
+  }
+  state.assets.push(Object.assign({_row:null}, vals));
+  assetDlg.close(); render(); toast('Asset added: '+name);
+  if(LIVE){
+    try{ await api({action:'assetAdd', fields}); loadAll(); }
+    catch(err){ toast('Not saved — '+err.message); }
+  }
+}
+
+async function assetReportPDF(){
+  if(!state.assets.length){ toast('No assets to report'); return; }
+  const fmt = d => d? new Date(d).toLocaleDateString('en-GB') : '—';
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+  try{
+    const blob = await fetch('logo.png').then(x=>x.blob());
+    const dataUrl = await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(blob);});
+    const img = await new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.src=dataUrl;});
+    doc.addImage(dataUrl,'PNG',10,8,14*(img.width/img.height),14);
+  }catch(e){}
+  const due = state.assets.filter(a=>{const d=maintDays(a); return d!=null && d<=30;}).length;
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(43,97,104);
+  doc.text('Asset & Maintenance Report', W-10, 13, {align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90,90,90);
+  doc.text(state.assets.length + ' asset(s) · ' + due + ' due maintenance ≤30 days · Printed ' +
+    new Date().toLocaleString('en-GB') + (myName?' by '+myName:''), W-10, 18.5, {align:'right'});
+  doc.setDrawColor(176,138,62); doc.setLineWidth(0.8); doc.line(10, 22, W-10, 22);
+  const sorted = [...state.assets].sort((a,b)=>{
+    const da=maintDays(a), db=maintDays(b);
+    if(da==null&&db==null) return a.name.localeCompare(b.name);
+    if(da==null) return 1; if(db==null) return -1; return da-db;});
+  doc.autoTable({
+    startY: 25, margin:{left:10,right:10},
+    head: [['Asset','Serial No.','Function','Location','Supplier','Contact','Last Maint.','Next Due','Status','Notes']],
+    body: sorted.map(a=>[a.name, a.serial||'', a.func||'', a.loc||'', a.supplier||'',
+      a.phone||'', fmt(a.last), fmt(a.next), a.status, a.notes||'']),
+    theme:'grid',
+    styles:{font:'helvetica',fontSize:8,cellPadding:1.8,lineColor:[185,201,197],lineWidth:0.15,
+            textColor:[23,37,31],overflow:'linebreak',valign:'middle'},
+    headStyles:{fillColor:[43,97,104],textColor:255,fontSize:8,fontStyle:'bold'},
+    alternateRowStyles:{fillColor:[242,247,246]},
+    columnStyles:{0:{cellWidth:36},1:{cellWidth:26},2:{cellWidth:34},3:{cellWidth:24},
+      4:{cellWidth:26},5:{cellWidth:26},6:{cellWidth:20},7:{cellWidth:20},8:{cellWidth:26}},
+    didParseCell: d => {
+      if(d.section==='body' && d.column.index===7){
+        const a = sorted[d.row.index], dd = maintDays(a);
+        if(dd!=null && dd<0){ d.cell.styles.textColor=[166,27,27]; d.cell.styles.fontStyle='bold'; }
+        else if(dd!=null && dd<=30){ d.cell.styles.textColor=[122,74,0]; d.cell.styles.fontStyle='bold'; }
+      }
+      if(d.section==='body' && d.column.index===8){
+        const s = d.cell.raw;
+        d.cell.styles.textColor = s==='Working'?[14,80,72]:s==='Decommissioned'?[100,100,100]:[166,27,27];
+      }
+    },
+    didDrawPage: d => {
+      doc.setFontSize(7.5); doc.setTextColor(140,140,140);
+      doc.text('Bollin Clinic Stock Manager — Assets', 10, doc.internal.pageSize.getHeight()-6);
+      doc.text('Page ' + d.pageNumber, W-10, doc.internal.pageSize.getHeight()-6, {align:'right'});
+    }
+  });
+  doc.save('Asset_Report_'+new Date().toISOString().slice(0,10)+'.pdf');
+  toast('Asset PDF downloaded');
+}
+
+/* ---------------- router ---------------- */
+function goHome(e){
+  e.preventDefault();
+  document.querySelectorAll('nav a').forEach(x=>x.classList.remove('active'));
+  const d=document.querySelector('nav a[data-view=dashboard]'); if(d) d.classList.add('active');
+  nav('dashboard');
+}
+function nav(view){
+  if(!viewAllowed(view)) view='dashboard';
+  currentView=view; window._q=''; window._store=''; window._cat=''; render(); }
+document.querySelectorAll('nav a').forEach(a=>a.addEventListener('click',e=>{
+  e.preventDefault();
+  document.querySelectorAll('nav a').forEach(x=>x.classList.remove('active'));
+  a.classList.add('active');
+  nav(a.dataset.view);
+}));
+function updateNavBadges(){
+  const a = document.querySelector('nav a[data-view=requests]');
+  if(!a) return;
+  const pend = state.requests.filter(r=>r.status==='Requested').length;
+  const impOrdered = state.implants.filter(i=>i.status==='Ordered'||i.status==='Pending').length;
+  const impAwaitRet = state.implants.filter(i=>i.status==='Delivered' && !i.returnDetails).length;
+  a.innerHTML = 'Requests' + (pend?` <span class="navdot">${pend}</span>`:'');
+}
+function render(){
+  updateNavBadges();
+  const v = currentView;
+  const m = $('#main');
+  if(v==='dashboard') m.innerHTML = dashboardView();
+  else if(v==='dash-low') m.innerHTML = listView('Low stock', i=>i.tracker!=='instruments'&&i.qty>0&&i.qty<=i.reorder);
+  else if(v==='dash-out') m.innerHTML = listView('Out of stock', i=>i.tracker!=='instruments'&&i.qty===0);
+  else if(v==='dash-exp') m.innerHTML = listView('Expiring within 90 days', i=>{const d=daysTo(i.expiry);return d!=null&&d<=90;});
+  else if(v==='log') m.innerHTML = logView();
+  else if(v==='requests') m.innerHTML = requestsView();
+  else if(v==='alerts') m.innerHTML = alertsView();
+  else if(v==='stocktake'){ m.innerHTML = stocktakeView(); paintStkSummary(); }
+  else if(v==='labels') m.innerHTML = labelsView();
+  else if(v==='implants') m.innerHTML = implantsView();
+  else if(v==='instruments') m.innerHTML = sterilView();
+  else if(v==='values') m.innerHTML = valuesView();
+  else if(v==='obsolete') m.innerHTML = obsoleteView();
+  else if(v==='stores') m.innerHTML = storesView();
+  else if(v==='assets') m.innerHTML = assetsView();
+  else if(v==='gas'){ m.innerHTML = gasView(); paintDeliv('o2'); paintDeliv('air'); }
+  else m.innerHTML = trackerView(v);
+}
+
+/* ---------------- Google Sheets API layer ---------------- */
+const LIVE = !!CONFIG.API_URL;
+state.alerts = state.alerts || [];
+
+async function api(payload){
+  if(session) payload.token = session.token;
+  const res = await fetch(CONFIG.API_URL, {
+    method:'POST', body: JSON.stringify(payload),
+    headers:{'Content-Type':'text/plain;charset=utf-8'}   // simple request: no CORS preflight
+  });
+  const data = await res.json();
+  if(!data.ok){
+    if(data.error==='AUTH'){ signOut(); showLogin('Session expired — please sign in again'); }
+    throw new Error(data.message||data.error||'Server error');
+  }
+  return data;
+}
+
+function mapItem(tab, r){
+  return {tracker: tab.toLowerCase(), _row: r._row,
+    code: r.Code!=null?String(r.Code):'', barcode: r.Barcode!=null?String(r.Barcode):'',
+    name: r.Name||'', cat: r.Category||'', supplier: r.Supplier||'',
+    loc: r.Location|| (tab==='Instruments' ? 'Bollin' : ''), unit: r.Unit||'Each',
+    qty: Number(r.Qty)||0, reorder: Number(r.ReorderLevel)||0,
+    cost: r.UnitCost!=null && r.UnitCost!=='' ? Number(r.UnitCost) : null,
+    expiry: r.Expiry ? String(r.Expiry).slice(0,10) : null,
+    batch: r.Batch||'', status: r.Status||'',
+    obsolete: String(r.Obsolete||'').toLowerCase()==='yes'};
+}
+
+async function loadAll(){
+  if(!LIVE) { render(); return; }
+  $('#scanEcho').textContent = 'Loading…';
+  try{
+    const data = await api({action:'getAll'});
+    const fresh = [];
+    for(const tab of Object.keys(data.items||{}))
+      (data.items[tab]||[]).forEach(r => fresh.push(mapItem(tab, r)));
+    state.items = fresh;   // swap in only after successful parse
+    state.log = data.transactions.map(t=>({ts:t.Timestamp, dir:t.Direction,
+      name:t.Name, code:t.Code, qty:t.Qty, by:t.By, tracker:String(t.Tracker||''),
+      batch:t.Batch, expiry:t.Expiry,
+      activity:t.Activity||(t.Direction==='in'?'Stock in':t.Direction==='out'?'Stock out':''),
+      note:t.Note||''}));
+    state.requests = data.requests.map(r=>({_row:r._row, ts:r.Timestamp, by:r.By,
+      item:r.Item, qty:r.Qty, size:r.Size||'', status:r.Status||'Requested',
+      handledBy:r.HandledBy||'', responded:r.DateResponded||null, remarks:r.Remarks||''}));
+    state.implants = (data.implants||[]).map(m=>({_row:m._row, ts:m.Timestamp,
+      initials:m.PatientInitials||'', pat:m.PATNumber||'', surgeon:m.Surgeon||'',
+      surgeryDate:m.SurgeryDate||null, details:m.ImplantDetails||'',
+      dateOrdered:m.DateOrdered||null, orderedBy:m.OrderedBy||'',
+      qty:m.Qty?Number(m.Qty):null, remarks:m.Remarks||'',
+      status:m.Status||'Pending', receivedBy:m.ReceivedBy||'',
+      receivedQty:m.ReceivedQty?Number(m.ReceivedQty):null, storage:m.StorageLocation||'',
+      scannedRef:m.ScannedRef?String(m.ScannedRef):'',
+      returnDetails:m.ReturnDetails||'', returnedQty:m.ReturnedQty?Number(m.ReturnedQty):null,
+      returnedBy:m.ReturnedBy||''}));
+    state.dispatch = (data.dispatch||[]).map(d=>{
+      let st = String(d.Status||'').trim().toLowerCase();
+      if(st.startsWith('pending')) st='Pending Collection';
+      else if(st==='partial') st='Partial';
+      else if(st==='returned' || (!st && d.DateReturned)) st='Returned';
+      else st='Out';
+      return {_row:d._row, ref:d.DispatchRef||'',
+      dateSent:d.DateSent||null, sentBy:d.SentBy||'', name:d.ItemName||'',
+      code:d.Code?String(d.Code):'', qtyOut:d.CountOut!=null&&d.CountOut!==''?Number(d.CountOut):1,
+      batch:d.BatchLot||'', dateUsed:d.DateUsed||null, usedBy:d.UsedBy||'',
+      dateReturned:d.DateReturned||null,
+      qtyIn:d.CountIn!=null&&d.CountIn!==''?Number(d.CountIn):null,
+      returnedBy:d.ReturnedBy||'', status:st};});
+    state.alerts = data.alerts.map(a=>({_row:a._row, ts:a.Timestamp, type:a.Type,
+      item:a.Item, detail:a.Detail, status:a.Status, tracker:a.Tracker}));
+    state.gasChecks = (data.gasChecks||[]).map(g=>({date:g.Date?String(g.Date).slice(0,10):'', by:g.By||'',
+      o2L:g.O2_LeftBank??'', o2R:g.O2_RightBank??'', o2P:g.O2_Pipeline??'', o2Use:g.O2_InUseBank||'',
+      o2Deliv:g.O2_DeliveryBooked==='Yes',
+      airL:g.Air_LeftBank??'', airR:g.Air_RightBank??'', airP:g.Air_Pipeline??'', airUse:g.Air_InUseBank||'',
+      airDeliv:g.Air_DeliveryBooked==='Yes',
+      heT:g.Helium_Total===''||g.Helium_Total==null?null:Number(g.Helium_Total),
+      heF:g.Helium_Full===''||g.Helium_Full==null?null:Number(g.Helium_Full),
+      heE:g.Helium_Empty===''||g.Helium_Empty==null?null:Number(g.Helium_Empty),
+      trT:g.TrolleyO2_Total===''||g.TrolleyO2_Total==null?null:Number(g.TrolleyO2_Total),
+      trF:g.TrolleyO2_Full===''||g.TrolleyO2_Full==null?null:Number(g.TrolleyO2_Full),
+      trE:g.TrolleyO2_Empty===''||g.TrolleyO2_Empty==null?null:Number(g.TrolleyO2_Empty),
+      trDate:g.TrolleyO2_NextDelivery||'',
+      pump:g.Vacuum_DutyPump?String(g.Vacuum_DutyPump):'', pumpStatus:g.Vacuum_Status||'',
+      af1:g.Airflow_TH1_Off==='Yes', af2:g.Airflow_TH2_Off==='Yes'}));
+    state.assets = (data.assets||[]).map(a=>({_row:a._row, name:a.Name||'', serial:a.SerialNumber?String(a.SerialNumber):'',
+      func:a.Function||'', supplier:a.Supplier||'', phone:a.SupplierContact?String(a.SupplierContact):'',
+      loc:a.Location||'', last:a.LastMaintenance||null, next:a.NextMaintenanceDue||null,
+      status:a.Status||'Working', notes:a.Notes||''}));
+    state.stores = (data.stores||[]).filter(s=>s.Store)
+      .map(s=>({_row:s._row, tracker:String(s.Tracker||'').toLowerCase(), store:String(s.Store)}));
+    data.barcodeLinks.forEach(b=>{
+      const i = state.items.findIndex(it=>it.code===String(b.Code) &&
+                                          it.tracker===String(b.Tracker).toLowerCase());
+      if(i>=0) state.barcodeLinks[String(b.Barcode)] = i;
+    });
+    if(session && data.role){ session.role = data.role; session.displayName = data.displayName || session.displayName;
+      myName = session.displayName;
+      try{ localStorage.setItem('bollin_session', JSON.stringify(session)); }catch(e){}
+      paintName(); applyNavPerms(); }
+    $('#scanEcho').textContent = '';
+    toast('Synced with Google Sheets');
+  }catch(err){
+    $('#scanEcho').textContent = '';
+    toast('Could not reach the sheet: '+err.message);
+  }
+  render();
+}
+
+/* ---------------- session, roles & permissions ---------------- */
+let session = null;   // {token, role, displayName, username}
+let myName = '';
+try { session = JSON.parse(localStorage.getItem('bollin_session')||'null'); } catch(e){}
+if(session) myName = session.displayName || '';
+
+const PERMS = {
+  admin:  {add:1, edit:1, labels:1, values:1, stocktake:1, implants:1, dispatch:1, receive:1, respond:1, ack:1, alerts:1, instr:1, reports:1, obsolete:1, stores:1, assets:1},
+  staff:  {add:0, edit:0, labels:0, values:1, stocktake:1, implants:1, dispatch:1, receive:1, respond:1, ack:1, alerts:1, instr:1, reports:1, obsolete:0, stores:0, assets:0},
+  common: {add:0, edit:0, labels:0, values:0, stocktake:0, implants:0, dispatch:0, receive:0, respond:0, ack:0, alerts:0, instr:0, reports:0, obsolete:0, stores:0, assets:0}
+};
+function role(){ return LIVE ? (session ? session.role : null) : 'admin'; }
+function can(p){ const r = role(); return !!(r && PERMS[r] && PERMS[r][p]); }
+
+function showLogin(msg){
+  $('#loginWrap').style.display = 'flex';
+  $('#loginErr').textContent = msg||'';
+  $('#liPass').value='';
+  setTimeout(()=>$('#liUser').focus(), 50);
+}
+function hideLogin(){ $('#loginWrap').style.display = 'none'; }
+
+async function doLogin(){
+  const u = $('#liUser').value.trim(), p = $('#liPass').value;
+  if(!u || !p){ $('#loginErr').textContent = 'Enter username and password'; return; }
+  $('#loginErr').textContent = 'Signing in…';
+  try{
+    const res = await fetch(CONFIG.API_URL, {method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({action:'login', username:u, password:p})});
+    const data = await res.json();
+    if(!data.ok){ $('#loginErr').textContent = data.error||'Sign-in failed'; return; }
+    session = {token:data.token, role:data.role, displayName:data.displayName, username:data.username};
+    myName = data.displayName;
+    try{ localStorage.setItem('bollin_session', JSON.stringify(session)); }catch(e){}
+    hideLogin(); paintName();
+    if(!(currentView in TRACKER_TAB) && !viewAllowed(currentView)) nav('dashboard');
+    loadAll();
+  }catch(err){ $('#loginErr').textContent = 'Could not reach the server'; }
+}
+function signOut(){
+  session = null; myName='';
+  try{ localStorage.removeItem('bollin_session'); }catch(e){}
+  paintName(); showLogin();
+}
+function openPw(){
+  ['pwOld','pwNew','pwNew2'].forEach(id=>$('#'+id).value='');
+  pwDlg.showModal();
+}
+async function doChangePassword(){
+  const o=$('#pwOld').value, n=$('#pwNew').value, n2=$('#pwNew2').value;
+  if(n.length<6){ toast('New password must be at least 6 characters'); return; }
+  if(n!==n2){ toast('New passwords do not match'); return; }
+  try{
+    await api({action:'changePassword', oldPassword:o, newPassword:n});
+    pwDlg.close(); toast('Password changed');
+  }catch(err){ toast(err.message); }
+}
+function paintName(){
+  const r = role();
+  $('#userName').textContent = LIVE
+    ? (session ? session.displayName + ' · ' + session.role : 'Not signed in')
+    : 'Demo mode';
+  $('#pwBtn').style.display = (LIVE && session) ? '' : 'none';
+  $('#outBtn').style.display = (LIVE && session) ? '' : 'none';
+}
+function viewAllowed(v){
+  if(v==='stocktake') return can('stocktake');
+  if(v==='labels') return can('labels');
+  if(v==='implants') return can('implants');
+  if(v==='alerts') return can('alerts');
+  if(v==='values') return can('values');
+  if(v==='obsolete') return can('obsolete');
+  if(v==='stores') return can('stores');
+  if(v==='assets') return can('assets');
+  return true;
+}
+function applyNavPerms(){
+  document.querySelectorAll('nav a').forEach(a=>{
+    a.style.display = viewAllowed(a.dataset.view) ? '' : 'none';
+  });
+}
+paintName();
+
+/* ---------------- init ---------------- *//* ---------------- init ---------------- */
+applyNavPerms();
+render();                          // instant paint
+if(LIVE && !session) showLogin();  // must sign in before data loads
+else loadAll();
+</script>
+</body>
+</html>
