@@ -481,6 +481,7 @@
     <a href="#users" data-view="users">Users &amp; roles</a>
     <a href="#rota" data-view="rota">Rota <span id="rotaBadge" style="display:none;background:var(--red);color:#fff;border-radius:99px;padding:1px 8px;font-size:11px;font-weight:800;margin-left:6px"></span></a>
     <a href="#procedures" data-view="procedures">Procedure costing</a>
+    <a href="#samples" data-view="samples">Sample collection</a>
   </nav>
 
   <main id="main"></main>
@@ -740,6 +741,26 @@
   <div class="m-actions">
     <button class="btn" onclick="pwDlg.close()">Cancel</button>
     <button class="btn primary" onclick="doChangePassword()">Change password</button>
+  </div>
+</dialog>
+
+<dialog id="smpDlg">
+  <h3 id="smpTitle" style="margin:0 0 4px">Sample collection</h3>
+  <div class="sub" style="margin-bottom:10px">One patient can have several specimens — add as many as you need. Each specimen is saved as its own record.</div>
+  <div class="m-grid2">
+    <div class="m-row"><label>Date</label><input id="smpDate" type="date"></div>
+    <div class="m-row"><label>Patient initials</label><input id="smpInit" type="text" maxlength="6" placeholder="e.g. C.R."></div>
+    <div class="m-row"><label>PAT number</label><input id="smpPat" type="text" placeholder="e.g. PAT-00944"></div>
+    <div class="m-row"><label>Surgeon</label><input id="smpSurg" list="rotaNames" type="text" placeholder="e.g. Mr Aftab Siddiqui"></div>
+  </div>
+  <div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between">
+    <strong style="font-size:13.5px">Specimens</strong>
+    <button class="btn" onclick="smpAddRow()">＋ Add specimen</button>
+  </div>
+  <div id="smpRows" style="margin-top:8px"></div>
+  <div class="m-actions">
+    <button class="btn" onclick="smpDlg.close()">Cancel</button>
+    <button class="btn primary" onclick="saveSamples()">Save specimens</button>
   </div>
 </dialog>
 
@@ -3190,6 +3211,7 @@ function gasHistoryHTML(){
 
 /* ---------------- assets (admin only) ---------------- */
 state.assets = state.assets || [];
+state.samples = state.samples || [];
 let editAsset = null;
 const ASSET_STATUS_CLS = s =>
   s==='Working' ? 'b-ok' :
@@ -3341,18 +3363,41 @@ async function assetReportPDF(){
 /* ---------------- procedure case costing (admin) ---------------- */
 state.procedures = state.procedures || [];
 state.procLines = state.procLines || [];
-let activeProc = null;          // the currently open procedure object (local mirror)
+// ---- concurrent procedure costing: one open case PER ROOM ----
+// _procByRoom maps room -> procedure object; _procRoom is the room currently on screen.
+// activeProc stays as a live accessor into that map so every existing call keeps working.
+const PROC_ROOMS = ['Theatre 1','Theatre 2','Minor ops'];
+let _procByRoom = {};           // { 'Theatre 1': {..proc..}, ... }
+let _procRoom = PROC_ROOMS[0];  // the room whose console is showing
+Object.defineProperty(window, 'activeProc', {
+  get(){ return _procByRoom[_procRoom] || null; },
+  set(v){ if(v) _procByRoom[_procRoom] = v; else delete _procByRoom[_procRoom]; },
+  configurable:true
+});
+var activeProc;                 // hoisted alias; the defineProperty above backs it
+function procAnyActive(){ return Object.keys(_procByRoom).length>0; }
+function procRoomsRunning(){ return PROC_ROOMS.filter(r=>_procByRoom[r]); }
 
-function procActive(){ return !!activeProc; }
+function procActive(){ return !!window.activeProc; }
 
 function procView(){
-  // admin-only entry point; hidden from nav until activated via this screen
   const open = state.procedures.filter(p=>p.status==='Open');
+  const tabs = PROC_ROOMS.map(r=>{
+    const on = _procRoom===r;
+    const running = !!_procByRoom[r];
+    return `<button onclick="procSwitchRoom('${r}')" style="padding:9px 16px;border:none;border-radius:10px 10px 0 0;
+      border-bottom:3px solid ${on?'var(--pine)':'transparent'};background:${on?'var(--card)':'transparent'};
+      font-weight:${on?'700':'600'};font-size:14px;color:${on?'var(--pine)':'var(--ink-soft)'};cursor:pointer;display:inline-flex;align-items:center;gap:7px">
+      <span class="led ${running?'green':'amber'}" style="margin:0"></span>${r}${running?'':' <span style="font-weight:400;font-size:12px">(free)</span>'}</button>`;
+  }).join('');
+  const runningCount = procRoomsRunning().length;
   return `<h1>Procedure case costing</h1>
-    <div class="sub">Track exactly what each surgeon and procedure consumes, so you can cost and charge accurately. Consuming here still decrements your normal stock — it just also records the item (and its cost) against the procedure.</div>
-    ${activeProc ? procConsolePanel() : procStartPanel(open)}
+    <div class="sub">Track exactly what each surgeon and procedure consumes. Each room runs its own case at the same time — pick the room below. Scanning adds to <strong>the room shown here</strong>.${runningCount>1?` <strong style="color:var(--pine)">${runningCount} cases running now.</strong>`:''}</div>
+    <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap">${tabs}</div>
+    ${window.activeProc ? procConsolePanel() : procStartPanel(open)}
     ${procHistoryPanel()}`;
 }
+function procSwitchRoom(r){ if(PROC_ROOMS.indexOf(r)>=0){ _procRoom=r; render(); } }
 
 function procStartPanel(open){
   return `
@@ -3378,7 +3423,7 @@ function procStartPanel(open){
 }
 
 function procConsolePanel(){
-  const p = activeProc;
+  const p = window.activeProc;
   const cart = procCart();
   const showMoney = (session && isAdmin());   // financials ADMIN ONLY (#3)
   const total = cart.reduce((s,l)=>s+(l.unitCost===''?0:Number(l.unitCost)*l.qty),0);
@@ -3403,7 +3448,7 @@ function procConsolePanel(){
     <div class="gaspanel" style="border:2px solid var(--pine);position:relative">
       <button onclick="cancelProc()" title="Cancel this procedure (started by mistake). Nothing has been taken from stock."
         style="position:absolute;top:10px;right:12px;width:32px;height:32px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--red);font-size:16px;font-weight:700;cursor:pointer;line-height:1">✕</button>
-      <h2><span class="led green"></span>Procedure in progress — scan to add items</h2>
+      <h2><span class="led green"></span>${p.room||_procRoom} — procedure in progress, scan to add items</h2>
       <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:8px">
         <div><div style="font-size:12px;color:var(--ink-soft)">Surgeon</div><strong>${p.surgeon||'—'}</strong></div>
         <div><div style="font-size:12px;color:var(--ink-soft)">Procedure</div><strong>${p.procedure||'—'}</strong></div>
@@ -3428,7 +3473,7 @@ function procConsolePanel(){
         <button class="btn" style="padding:12px 20px" onclick="procTempSave(false)" title="Save your progress to the server without ending. Stock is NOT touched.">💾 Save progress</button>
         <button class="btn primary" style="padding:12px 24px" onclick="endProc()">■ End procedure &amp; consume stock</button>
         ${(session&&isAdmin())?`<button class="btn" onclick="downloadProcPDF('${p.procedureId}')">Download case sheet PDF</button>`:''}
-        <span id="procSaveState" style="color:var(--ink-soft);font-size:12.5px">${activeProc&&activeProc._savedAt?'All changes saved':'Not saved yet'}</span>
+        <span id="procSaveState" style="color:var(--ink-soft);font-size:12.5px">${window.activeProc&&window.activeProc._savedAt?'All changes saved':'Not saved yet'}</span>
         <span style="margin-left:auto;color:var(--ink-soft);font-size:13px">${cart.length} line(s)</span>
       </div>
     </div>`;
@@ -3472,14 +3517,16 @@ async function startProc(){
   const date = $('#pcDate').value || todayISO();
   const patientRef = $('#pcRef').value.trim();
   if(!surgeon || !procedure){ toast('Enter at least surgeon and procedure'); return; }
+  if(_procByRoom[_procRoom]){ toast(_procRoom+' already has a case running'); return; }
+  const room = _procRoom;
   const localId = 'PROC-LOCAL-' + Date.now();
-  activeProc = {procedureId:localId, surgeon, procedure, date, patientRef, status:'Open', totalCost:0, by:myName||''};
-  state.procedures.push(activeProc);
-  render(); toast('Procedure started — scan items to consume');
+  _procByRoom[room] = {procedureId:localId, surgeon, procedure, date, patientRef, room, status:'Open', totalCost:0, by:myName||''};
+  state.procedures.push(_procByRoom[room]);
+  render(); toast(room+': procedure started — scan items to consume');
   if(LIVE){
     try{
-      const res = await api({action:'procStart', surgeon, procedure, date, patientRef, by:myName||''});
-      if(res.procedureId){ activeProc.procedureId = res.procedureId; }  // swap to real id
+      const res = await api({action:'procStart', surgeon, procedure, date, patientRef, room, by:myName||''});
+      if(res.procedureId){ _procByRoom[room].procedureId = res.procedureId; }
     }catch(err){ toast('Not saved to sheet — '+err.message); }
   }
 }
@@ -3488,7 +3535,7 @@ async function startProc(){
 // A procedure keeps a local "cart" of consumed lines. Stock is NOT touched on each
 // scan — it is only decremented when the procedure is ended. This means a mistaken
 // item or wrong quantity can be fixed freely during the procedure with no stock impact.
-function procCart(){ return activeProc ? (activeProc._cart = activeProc._cart || []) : []; }
+function procCart(){ return window.activeProc ? (window.activeProc._cart = window.activeProc._cart || []) : []; }
 
 function procConsumeScan(it){
   const cart = procCart();
@@ -3584,7 +3631,7 @@ function procPickChoose(ix){
 // ---- temporary save (security net): persist the cart to the sheet without ending ----
 let _procSaving = false;
 async function procTempSave(silent){
-  if(!activeProc) return;
+  if(!window.activeProc) return;
   const cart = procCart();
   if(!silent && cart.length>1){
     // manual "Save progress" tidies the list A→Z; while scanning it stays in scan order
@@ -3595,10 +3642,10 @@ async function procTempSave(silent){
   if(_procSaving) return;
   _procSaving = true;
   try{
-    await api({action:'procSaveCart', procedureId:activeProc.procedureId,
+    await api({action:'procSaveCart', procedureId:window.activeProc.procedureId,
       cart: cart.map(l=>({tracker:l.tracker, code:l.code||'', barcode:l.barcode||'',
         name:l.name, qty:l.qty, unitCost:(l.unitCost===''?'':l.unitCost)})), by:myName||''});
-    activeProc._savedAt = new Date();
+    window.activeProc._savedAt = new Date();
     if(!silent) toast('Progress saved ✓ ('+cart.length+' lines) — safe to close or refresh');
     else { const b=document.getElementById('procSaveState'); if(b) b.textContent='All changes saved'; }
   }catch(err){ if(!silent) toast('Save failed — '+err.message); }
@@ -3607,20 +3654,20 @@ async function procTempSave(silent){
 // autosave the cart shortly after each change, so a crash never loses more than a few seconds
 let _procAutosaveTimer = null;
 function procAutosave(){
-  if(!activeProc || !LIVE) return;
+  if(!window.activeProc || !LIVE) return;
   const b=document.getElementById('procSaveState'); if(b) b.textContent='Saving…';
   clearTimeout(_procAutosaveTimer);
   _procAutosaveTimer = setTimeout(()=>procTempSave(true), 1200);
 }
 
 async function endProc(){
-  if(!activeProc) return;
+  if(!window.activeProc) return;
   const cart = procCart();
   const total = cart.reduce((s,l)=>s+(l.unitCost===''?0:Number(l.unitCost)*l.qty),0);
   if(!cart.length){ if(!confirm('End this procedure with no items added?')) return; }
   else if(!confirm('End procedure and consume '+cart.length+' item line(s) from stock now?'+
     (total?' (£'+total.toFixed(2)+' total)':'')+'\n\nThis is when stock is actually decremented.')) return;
-  const id = activeProc.procedureId;
+  const id = window.activeProc.procedureId;
 
   if(!LIVE){
     // demo mode: reflect stock locally
@@ -3628,7 +3675,7 @@ async function endProc(){
       ((l.code&&i.code===l.code)||(l.barcode&&i.barcode===l.barcode)||i.name===l.name));
       if(it) it.qty = Math.max(0, it.qty - l.qty); });
     const p = state.procedures.find(x=>x.procedureId===id); if(p){ p.status='Closed'; p.totalCost=total; }
-    activeProc = null; render(); toast('Procedure ended (demo)');
+    window.activeProc = null; render(); toast('Procedure ended (demo)');
     return;
   }
 
@@ -3648,11 +3695,11 @@ async function endProc(){
         '\n\nThe other items were consumed. Please check these manually.');
     }
     // success (fully or partially) — clear local cart and refresh from sheet
-    if(activeProc) activeProc._cart = [];
-    activeProc = null;
+    if(window.activeProc) window.activeProc._cart = [];
+    window.activeProc = null;
     window._justEndedProc = id;          // stop a stale reload resurrecting it
     await loadAll();
-    if(activeProc && activeProc.procedureId===window._justEndedProc) activeProc = null;
+    if(window.activeProc && window.activeProc.procedureId===window._justEndedProc) window.activeProc = null;
     window._justEndedProc = null;
     toast('Procedure ended — stock updated');
   }catch(err){
@@ -3663,15 +3710,15 @@ async function endProc(){
 
 // ---- #2: cancel an open procedure started by mistake (nothing consumed yet) ----
 async function cancelProc(){
-  if(!activeProc) return;
+  if(!window.activeProc) return;
   const cart = procCart();
   if(!confirm('Cancel this procedure?\n\n'+
     (cart.length? cart.length+' item line(s) in the list will be DISCARDED. ':'')+
     'Nothing has been taken from stock, so no inventory changes are needed.\n\nThis cannot be undone.')) return;
-  const id = activeProc.procedureId;
+  const id = window.activeProc.procedureId;
   const ix = state.procedures.findIndex(x=>x.procedureId===id);
   if(ix>=0) state.procedures.splice(ix,1);
-  activeProc = null;
+  window.activeProc = null;
   render(); toast('Procedure cancelled — nothing was consumed');
   if(LIVE && !String(id).startsWith('PROC-LOCAL')){
     try{ await api({action:'procCancel', procedureId:id, by:myName||''}); loadAll(); }
@@ -3681,18 +3728,18 @@ async function cancelProc(){
 
 // ---- #1: admin corrects surgeon / procedure / date / patient ref ----
 async function procEditMeta(){
-  if(!activeProc || !(session&&isAdmin())) return;
-  const surgeon = prompt('Surgeon:', activeProc.surgeon||''); if(surgeon===null) return;
-  const procedure = prompt('Procedure:', activeProc.procedure||''); if(procedure===null) return;
-  const date = prompt('Date (YYYY-MM-DD):', activeProc.date? String(activeProc.date).slice(0,10):todayISO()); if(date===null) return;
-  const patientRef = prompt('Patient ref (optional):', activeProc.patientRef||''); if(patientRef===null) return;
-  activeProc.surgeon=surgeon.trim(); activeProc.procedure=procedure.trim();
-  activeProc.date=date.trim(); activeProc.patientRef=patientRef.trim();
+  if(!window.activeProc || !(session&&isAdmin())) return;
+  const surgeon = prompt('Surgeon:', window.activeProc.surgeon||''); if(surgeon===null) return;
+  const procedure = prompt('Procedure:', window.activeProc.procedure||''); if(procedure===null) return;
+  const date = prompt('Date (YYYY-MM-DD):', window.activeProc.date? String(window.activeProc.date).slice(0,10):todayISO()); if(date===null) return;
+  const patientRef = prompt('Patient ref (optional):', window.activeProc.patientRef||''); if(patientRef===null) return;
+  window.activeProc.surgeon=surgeon.trim(); window.activeProc.procedure=procedure.trim();
+  window.activeProc.date=date.trim(); window.activeProc.patientRef=patientRef.trim();
   render(); toast('Details updated');
-  if(LIVE && !String(activeProc.procedureId).startsWith('PROC-LOCAL')){
-    try{ await api({action:'procUpdateMeta', procedureId:activeProc.procedureId,
-      surgeon:activeProc.surgeon, procedure:activeProc.procedure,
-      date:activeProc.date, patientRef:activeProc.patientRef, by:myName||''}); }
+  if(LIVE && !String(window.activeProc.procedureId).startsWith('PROC-LOCAL')){
+    try{ await api({action:'procUpdateMeta', procedureId:window.activeProc.procedureId,
+      surgeon:window.activeProc.surgeon, procedure:window.activeProc.procedure,
+      date:window.activeProc.date, patientRef:window.activeProc.patientRef, by:myName||''}); }
     catch(err){ toast('Not saved — '+err.message); }
   }
 }
@@ -3700,7 +3747,7 @@ async function procEditMeta(){
 // ---- #1: admin reopens a closed procedure; consumed stock is returned until re-ended ----
 async function procEditClosed(procId){
   if(!(session&&isAdmin())) return;
-  if(activeProc){ toast('Finish or cancel the current procedure first'); return; }
+  if(window.activeProc){ toast('Finish or cancel the current procedure first'); return; }
   if(!confirm('Reopen this procedure for editing?\n\nEverything it consumed will be RETURNED to stock now, and consumed again (with your corrections) when you end it. The case sheet will reflect the corrected list.')) return;
   if(!LIVE){ toast('Not available in demo mode'); return; }
   toast('Reopening — returning its stock…');
@@ -3715,7 +3762,7 @@ async function procEditClosed(procId){
       p.status='Open';
       p._cart = (res.cart||[]).length ? res.cart :
         (p.cartJSON ? (function(){try{return JSON.parse(p.cartJSON);}catch(e){return [];}})() : []);
-      activeProc = p;
+      window.activeProc = p;
     }
     render(); toast('Procedure reopened — adjust the list, then end it again');
   }catch(err){ toast('Could not reopen — '+err.message); loadAll(); }
@@ -4846,7 +4893,222 @@ async function rotaStaffPDF(){
   doc.save('Rota_'+sv.name.replace(/[^A-Za-z0-9]+/g,'_')+'_'+from+'_'+to+'.pdf'); toast('PDF downloaded');
 }
 
+/* ---------------- sample collection (specimen log) ---------------- */
+const SAMPLE_CATEGORIES = ['Histology','Cytology','Microbiology','Frozen section','Immunology','Biochemistry','Other'];
+let _smpDraft = null;   // { id?, date, initials, pat, surgeon, rows:[{specimenNo,details,category,formalin,collected,sent,result,notes, id?}] }
+
+function samplesView(){
+  const q = String(window._smpQ||'').toLowerCase().trim();
+  let list = (state.samples||[]).slice();
+  if(q) list = list.filter(s=> (s.pat||'').toLowerCase().includes(q) || (s.initials||'').toLowerCase().includes(q)
+    || (s.surgeon||'').toLowerCase().includes(q) || (s.details||'').toLowerCase().includes(q) || (s.category||'').toLowerCase().includes(q));
+  // group by PAT+date+initials so a patient's specimens sit together
+  const groups = {};
+  list.forEach(s=>{ const k = (s.pat||'')+'|'+(s.date||'')+'|'+(s.initials||''); (groups[k]=groups[k]||[]).push(s); });
+  const keys = Object.keys(groups).sort((a,b)=>{
+    const da=(groups[b][0].date||''), db=(groups[a][0].date||''); return da.localeCompare(db); });
+  const canEdit = isStaffPlus();
+  const catBadge = c => c ? `<span class="badge" style="background:var(--mist);color:var(--ink)">${c}</span>` : '';
+  const dateCell = d => d ? new Date(d+'T12:00').toLocaleDateString('en-GB') : '<span style="color:var(--ink-soft)">—</span>';
+  let body = keys.map(k=>{
+    const g = groups[k]; const h = g[0];
+    const rows = g.map(s=>`<tr>
+      <td data-label="Specimen"><strong>${s.details||'—'}</strong>${s.specimenNo?` <span class="code" style="font-family:var(--mono);font-size:11px">#${s.specimenNo}</span>`:''}</td>
+      <td data-label="Category">${catBadge(s.category)}</td>
+      <td data-label="Formalin">${String(s.formalin).toLowerCase()==='yes'?'<span class="badge b-ok">Yes</span>':(String(s.formalin).toLowerCase()==='no'?'<span class="badge b-out">No</span>':'—')}</td>
+      <td data-label="Collected">${dateCell(s.collected)}</td>
+      <td data-label="Sent">${dateCell(s.sent)}</td>
+      <td data-label="Result">${dateCell(s.result)}</td>
+      ${canEdit?`<td class="rowbtns" data-label=""><button onclick="editSampleGroup('${k.replace(/'/g,"\\'")}')">Edit</button>${isAdmin()?` <button onclick="deleteSample('${s.id}')" style="color:var(--red)">✕</button>`:''}</td>`:''}
+    </tr>`).join('');
+    return `<div class="gaspanel" style="padding:0;overflow:hidden">
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:12px 14px;background:var(--mist)">
+        <strong style="font-size:15px">${h.initials||'—'}</strong>
+        <span class="code" style="font-family:var(--mono)">${h.pat||'—'}</span>
+        <span style="color:var(--ink-soft)">${dateCell(h.date)}</span>
+        <span style="color:var(--ink-soft)">${h.surgeon||''}</span>
+        <span style="margin-left:auto;font-size:12.5px;color:var(--ink-soft)">${g.length} specimen${g.length>1?'s':''}</span>
+      </div>
+      <table style="margin:0"><thead><tr><th>Specimen</th><th>Category</th><th>Formalin</th><th>Collected</th><th>Sent</th><th>Result</th>${canEdit?'<th></th>':''}</tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }).join('');
+  if(!keys.length) body = `<div class="sub" style="padding:20px 0">${q?'No specimens match your search.':'No specimens logged yet.'}</div>`;
+  return `<h1>Sample collection</h1>
+    <div class="sub">Log histology, cytology and other specimens taken in theatre — track when each was collected, sent to the lab, and when results came back.</div>
+    <datalist id="rotaNames">${(typeof rotaNamesList==='function'?rotaNamesList():[]).map(n=>`<option value="${n.replace(/"/g,'&quot;')}">`).join('')}</datalist>
+    <div class="toolrow" style="margin:6px 0 14px">
+      ${canEdit?`<button class="btn primary" onclick="newSample()">＋ New patient / specimens</button>`:''}
+      <input type="search" placeholder="Search PAT number, initials, surgeon…" value="${String(window._smpQ||'').replace(/"/g,'&quot;')}"
+        oninput="window._smpQ=this.value;render()" style="flex:1;min-width:220px;padding:10px 12px;border:1px solid var(--line);border-radius:8px">
+      ${window._smpQ?`<button class="btn" onclick="window._smpQ='';render()">Clear</button>`:''}
+    </div>
+    <div class="toolrow" style="margin-bottom:14px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--ink-soft);align-self:center">Download report:</span>
+      <button class="btn" onclick="samplePDF('day')">Day</button>
+      <button class="btn" onclick="samplePDF('week')">Week</button>
+      <button class="btn" onclick="samplePDF('month')">Month</button>
+      <button class="btn" onclick="samplePDFSurgeon()">By surgeon…</button>
+      ${window._smpQ?`<button class="btn" onclick="samplePDF('search')">Current search</button>`:''}
+    </div>
+    ${body}`;
+}
+
+function smpBlankRow(){ return {specimenNo:'', details:'', category:'Histology', formalin:'Yes', collected:todayISO(), sent:'', result:'', notes:'', id:''}; }
+function newSample(){
+  _smpDraft = { id:'', date:todayISO(), initials:'', pat:'', surgeon:'', rows:[smpBlankRow()] };
+  smpFillDialog('New patient / specimens'); smpDlg.showModal();
+}
+function editSampleGroup(key){
+  const parts = key.split('|'); const pat=parts[0], date=parts[1], init=parts[2];
+  const g = (state.samples||[]).filter(s=>(s.pat||'')===pat && (s.date||'')===date && (s.initials||'')===init);
+  if(!g.length) return;
+  _smpDraft = { date:g[0].date||todayISO(), initials:g[0].initials||'', pat:g[0].pat||'', surgeon:g[0].surgeon||'',
+    rows: g.map(s=>({specimenNo:s.specimenNo||'', details:s.details||'', category:s.category||'Histology',
+      formalin:s.formalin||'', collected:s.collected||'', sent:s.sent||'', result:s.result||'', notes:s.notes||'', id:s.id})) };
+  smpFillDialog('Edit specimens'); smpDlg.showModal();
+}
+function smpFillDialog(title){
+  $('#smpTitle').textContent = title;
+  $('#smpDate').value = _smpDraft.date||''; $('#smpInit').value = _smpDraft.initials||'';
+  $('#smpPat').value = _smpDraft.pat||''; $('#smpSurg').value = _smpDraft.surgeon||'';
+  smpRenderRows();
+}
+function smpRenderRows(){
+  const opts = c => SAMPLE_CATEGORIES.map(x=>`<option ${x===c?'selected':''}>${x}</option>`).join('');
+  const yn = v => `<option value="Yes" ${String(v).toLowerCase()==='yes'?'selected':''}>Yes</option><option value="No" ${String(v).toLowerCase()==='no'?'selected':''}>No</option>`;
+  $('#smpRows').innerHTML = _smpDraft.rows.map((r,i)=>`
+    <div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;background:var(--card)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <strong style="font-size:12.5px;color:var(--ink-soft)">Specimen ${i+1}</strong>
+        ${_smpDraft.rows.length>1?`<button class="btn" style="padding:3px 9px;color:var(--red)" onclick="smpDelRow(${i})">Remove</button>`:''}
+      </div>
+      <div class="m-grid2">
+        <div class="m-row" style="grid-column:1/-1"><label>Sample details</label><input value="${String(r.details).replace(/"/g,'&quot;')}" oninput="_smpDraft.rows[${i}].details=this.value"></div>
+        <div class="m-row"><label>Specimen no. (optional)</label><input value="${String(r.specimenNo).replace(/"/g,'&quot;')}" oninput="_smpDraft.rows[${i}].specimenNo=this.value"></div>
+        <div class="m-row"><label>Category</label><select onchange="_smpDraft.rows[${i}].category=this.value">${opts(r.category)}</select></div>
+        <div class="m-row"><label>Formalin</label><select onchange="_smpDraft.rows[${i}].formalin=this.value">${yn(r.formalin)}</select></div>
+        <div class="m-row"><label>Date collected</label><input type="date" value="${r.collected||''}" oninput="_smpDraft.rows[${i}].collected=this.value"></div>
+        <div class="m-row"><label>Date sent</label><input type="date" value="${r.sent||''}" oninput="_smpDraft.rows[${i}].sent=this.value"></div>
+        <div class="m-row"><label>Date result received</label><input type="date" value="${r.result||''}" oninput="_smpDraft.rows[${i}].result=this.value"></div>
+      </div>
+    </div>`).join('');
+}
+function smpSyncHeader(){
+  _smpDraft.date=$('#smpDate').value; _smpDraft.initials=$('#smpInit').value.trim();
+  _smpDraft.pat=$('#smpPat').value.trim(); _smpDraft.surgeon=$('#smpSurg').value.trim();
+}
+function smpAddRow(){ smpSyncHeader(); _smpDraft.rows.push(smpBlankRow()); smpRenderRows(); }
+function smpDelRow(i){ smpSyncHeader(); _smpDraft.rows.splice(i,1); if(!_smpDraft.rows.length) _smpDraft.rows.push(smpBlankRow()); smpRenderRows(); }
+
+async function saveSamples(){
+  smpSyncHeader();
+  if(!_smpDraft.pat && !_smpDraft.initials){ toast('Enter at least patient initials or PAT number'); return; }
+  const hdr = { date:_smpDraft.date, initials:_smpDraft.initials, pat:_smpDraft.pat, surgeon:_smpDraft.surgeon };
+  const rows = _smpDraft.rows.filter(r=>String(r.details||'').trim() || String(r.specimenNo||'').trim());
+  if(!rows.length){ toast('Add at least one specimen with details'); return; }
+  smpDlg.close();
+  for(const r of rows){
+    const fields = { Date:hdr.date, PatientInitials:hdr.initials, PATNumber:hdr.pat, Surgeon:hdr.surgeon,
+      SpecimenNo:r.specimenNo||'', SampleDetails:r.details||'', Category:r.category||'', Formalin:r.formalin||'',
+      DateCollected:r.collected||'', DateSent:r.sent||'', DateResult:r.result||'', By:myName||'', Notes:r.notes||'' };
+    // optimistic local update
+    if(r.id){ const ex=(state.samples||[]).find(s=>s.id===r.id);
+      if(ex) Object.assign(ex,{date:hdr.date,initials:hdr.initials,pat:hdr.pat,surgeon:hdr.surgeon,
+        specimenNo:r.specimenNo,details:r.details,category:r.category,formalin:r.formalin,collected:r.collected,sent:r.sent,result:r.result}); }
+    else { state.samples = state.samples||[]; state.samples.push({ id:'(saving)', date:hdr.date, initials:hdr.initials, pat:hdr.pat,
+      surgeon:hdr.surgeon, specimenNo:r.specimenNo, details:r.details, category:r.category, formalin:r.formalin,
+      collected:r.collected, sent:r.sent, result:r.result, by:myName||'' }); }
+  }
+  render(); toast(rows.length+' specimen'+(rows.length>1?'s':'')+' saved');
+  if(LIVE){
+    try{
+      for(const r of rows){
+        const fields = { Date:hdr.date, PatientInitials:hdr.initials, PATNumber:hdr.pat, Surgeon:hdr.surgeon,
+          SpecimenNo:r.specimenNo||'', SampleDetails:r.details||'', Category:r.category||'', Formalin:r.formalin||'',
+          DateCollected:r.collected||'', DateSent:r.sent||'', DateResult:r.result||'', By:myName||'', Notes:r.notes||'' };
+        await api({action:'sampleSave', sampleId:r.id||'', fields, by:myName||''});
+      }
+      await loadAll();
+    }catch(err){ toast('Some specimens not saved — '+err.message); loadAll(); }
+  }
+}
+async function deleteSample(id){
+  if(!isAdmin()) return;
+  if(!confirm('Delete this specimen record? This cannot be undone.')) return;
+  state.samples = (state.samples||[]).filter(s=>s.id!==id);
+  render(); toast('Specimen deleted');
+  if(LIVE){ try{ await api({action:'sampleDelete', sampleId:id, by:myName||''}); await loadAll(); }
+    catch(err){ toast('Not deleted — '+err.message); loadAll(); } }
+}
+
+// ---- sample PDF (implants style) ----
+function sampleRowsInRange(from, to){
+  return (state.samples||[]).filter(s=> s.date && s.date>=from && s.date<=to)
+    .sort((a,b)=> (a.date||'').localeCompare(b.date||'') || (a.pat||'').localeCompare(b.pat||''));
+}
+async function sampleExport(rows, subtitle, fname){
+  if(!isStaffPlus()) return;
+  if(typeof window.jspdf==='undefined'){ toast('PDF engine still loading — try again'); return; }
+  if(!rows.length){ toast('No specimens in this range'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
+  const W = doc.internal.pageSize.getWidth();
+  try{
+    const blob = await fetch('logo.png').then(r=>r.blob());
+    const dataUrl = await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(blob);});
+    const img = await new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>res(null);setTimeout(()=>res(null),1500);i.src=dataUrl;});
+    if(img){ const hMM=14, wMM=hMM*(img.width/img.height); doc.addImage(dataUrl,'PNG',10,8,wMM,hMM); }
+  }catch(e){}
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(43,97,104);
+  doc.text('Sample Collection Report', W-10, 13, {align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90,90,90);
+  const withResult = rows.filter(r=>r.result).length;
+  doc.text(subtitle+'  ·  '+rows.length+' specimens  ·  '+withResult+' with results', W-10, 18.5, {align:'right'});
+  doc.text('Printed '+new Date().toLocaleString('en-GB')+(myName?' by '+myName:''), W-10, 23, {align:'right'});
+  doc.setDrawColor(176,138,62); doc.setLineWidth(0.8); doc.line(10,25.5,W-10,25.5);
+  const fmt = d => d ? new Date(d+'T12:00').toLocaleDateString('en-GB') : '';
+  if(typeof doc.autoTable!=='function'){ toast('PDF table plugin failed to load — refresh and try again'); return; }
+  doc.autoTable({
+    startY:28, margin:{left:10,right:10},
+    head:[['Date','Initials','PAT No.','Surgeon','Specimen','Category','Formalin','Collected','Sent','Result']],
+    body: rows.map(s=>[fmt(s.date), s.initials||'', s.pat||'', s.surgeon||'', (s.details||'')+(s.specimenNo?' (#'+s.specimenNo+')':''),
+      s.category||'', s.formalin||'', fmt(s.collected), fmt(s.sent), fmt(s.result)]),
+    theme:'grid',
+    styles:{font:'helvetica', fontSize:8, cellPadding:1.6, lineColor:[185,201,197], lineWidth:0.15, textColor:[23,37,31], overflow:'linebreak', valign:'middle'},
+    headStyles:{fillColor:[43,97,104], textColor:255, fontSize:8, fontStyle:'bold', halign:'left'},
+    alternateRowStyles:{fillColor:[242,247,246]},
+    columnStyles:{0:{cellWidth:20},1:{cellWidth:16},2:{cellWidth:22},3:{cellWidth:34},4:{cellWidth:56},5:{cellWidth:22},6:{cellWidth:16,halign:'center'},7:{cellWidth:20},8:{cellWidth:20},9:{cellWidth:20}},
+    didParseCell: d=>{ if(d.section==='body' && d.column.index===9 && !d.cell.raw){ d.cell.text=['pending']; d.cell.styles.textColor=[166,27,27]; d.cell.styles.fontStyle='italic'; } },
+    didDrawPage: d=>{ doc.setFontSize(7.5); doc.setTextColor(140,140,140);
+      doc.text('Bollin Clinic Stock Manager — Sample collection', 10, doc.internal.pageSize.getHeight()-6);
+      doc.text('Page '+d.pageNumber, W-10, doc.internal.pageSize.getHeight()-6, {align:'right'}); }
+  });
+  doc.save(fname); toast('PDF downloaded');
+}
+function samplePDF(kind){
+  const t0 = new Date(); const iso = d=>d.toISOString().slice(0,10);
+  if(kind==='day'){ const d=iso(new Date(t0.getTime()+12*3600*1000)); sampleExport(sampleRowsInRange(d,d), 'Day — '+new Date(d+'T12:00').toLocaleDateString('en-GB'), 'Samples_'+d+'.pdf'); }
+  else if(kind==='week'){ const wd=(t0.getDay()+6)%7; const mon=new Date(t0); mon.setDate(t0.getDate()-wd); const sun=new Date(mon.getTime()+6*864e5);
+    sampleExport(sampleRowsInRange(iso(mon),iso(sun)), 'Week of '+mon.toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'}), 'Samples_Week_'+iso(mon)+'.pdf'); }
+  else if(kind==='month'){ const f=new Date(t0.getFullYear(),t0.getMonth(),1); const l=new Date(t0.getFullYear(),t0.getMonth()+1,0);
+    sampleExport(sampleRowsInRange(iso(f),iso(l)), f.toLocaleDateString('en-GB',{month:'long',year:'numeric'}), 'Samples_Month_'+iso(f).slice(0,7)+'.pdf'); }
+  else if(kind==='search'){ const q=String(window._smpQ||'').toLowerCase().trim();
+    const rows=(state.samples||[]).filter(s=>(s.pat||'').toLowerCase().includes(q)||(s.initials||'').toLowerCase().includes(q)||(s.surgeon||'').toLowerCase().includes(q)||(s.details||'').toLowerCase().includes(q));
+    sampleExport(rows.sort((a,b)=>(a.date||'').localeCompare(b.date||'')), 'Search: "'+window._smpQ+'"', 'Samples_Search.pdf'); }
+}
+function samplePDFSurgeon(){
+  const names=[...new Set((state.samples||[]).map(s=>s.surgeon).filter(Boolean))].sort();
+  if(!names.length){ toast('No surgeons on record'); return; }
+  const name = prompt('Surgeon name (exact or part):\n'+names.join('\n'));
+  if(name===null || !name.trim()) return;
+  const q = name.toLowerCase().trim();
+  const rows = (state.samples||[]).filter(s=>(s.surgeon||'').toLowerCase().includes(q)).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  if(!rows.length){ toast('No specimens for that surgeon'); return; }
+  sampleExport(rows, 'Surgeon: '+name, 'Samples_'+name.replace(/[^A-Za-z0-9]+/g,'_')+'.pdf');
+}
+
 /* ---------------- router ---------------- */
+
 
 function goHome(e){
   e.preventDefault();
@@ -4895,6 +5157,7 @@ function render(){
   else if(v==='gas'){ m.innerHTML = gasView(); paintDeliv('o2'); paintDeliv('air'); }
   else if(v==='stickers') m.innerHTML = stickersView();
   else if(v==='procedures') m.innerHTML = procView();
+  else if(v==='samples') m.innerHTML = samplesView();
   else if(v==='users') m.innerHTML = usersView();
   else if(v==='rota') m.innerHTML = rotaView();
   else m.innerHTML = trackerView(v);
@@ -5000,35 +5263,37 @@ async function loadAll(){
         scrub1:S(r['T'+t+'_Scrub1']), scrub2:S(r['T'+t+'_Scrub2']), scrub3:S(r['T'+t+'_Scrub3']), odp:S(r['T'+t+'_ODP']) }; });
       return day; });
     if(typeof updateRotaBadge==='function') updateRotaBadge();
-    // ---- CRITICAL: preserve the in-progress procedure + its cart across a reload ----
-    // The cart lives only in memory (activeProc._cart). If we blindly rebuilt procedures
-    // from the sheet, an accidental loadAll() during a case would wipe every scanned item.
-    // So we capture the live cart first, rebuild the list, then re-attach the cart.
-    const _liveProcId = activeProc ? activeProc.procedureId : null;
-    const _liveCart   = activeProc ? (activeProc._cart || []) : null;
+    // ---- CRITICAL: preserve every room's in-progress procedure + cart across a reload ----
+    // Carts live only in memory (proc._cart). Capture each room's live proc id + cart BEFORE
+    // rebuilding, then re-attach after — so an accidental loadAll() mid-case never wipes items.
+    const _liveByRoom = {};
+    Object.keys(_procByRoom).forEach(room=>{ const p=_procByRoom[room];
+      if(p) _liveByRoom[room] = { id:p.procedureId, cart:(p._cart||[]), local:String(p.procedureId).startsWith('PROC-LOCAL') , obj:p }; });
     state.procedures = (data.procedures||[]).map(p=>({procedureId:p.ProcedureID||'', date:p.Date||'',
       surgeon:p.Surgeon||'', procedure:p.Procedure||'', patientRef:p.PatientRef||'', startedBy:p.StartedBy||'',
       status:p.Status||'Open', startTime:p.StartTime||'', endTime:p.EndTime||'',
       totalCost:p.TotalCost===''||p.TotalCost==null?0:Number(p.TotalCost), notes:p.Notes||'',
-      cartJSON:p.CartJSON||''}));
+      room:p.Room||'', cartJSON:p.CartJSON||''}));
     state.procLines = (data.procLines||[]).map(l=>({procedureId:l.ProcedureID||'', ts:l.Timestamp,
       tracker:(l.Tracker||'').toLowerCase(), code:l.Code||'', name:l.Name||'',
       qty:Number(l.Qty)||0, unitCost:l.UnitCost===''||l.UnitCost==null?'':Number(l.UnitCost),
       lineCost:l.LineCost===''||l.LineCost==null?'':Number(l.LineCost), by:l.By||''}));
-    if(_liveProcId){
-      // we were mid-procedure: find the same procedure in the fresh list and re-attach the live cart
-      const same = state.procedures.find(p=>p.procedureId===_liveProcId);
-      if(same && same.status==='Open'){ same._cart = _liveCart; activeProc = same; }
-      else if(same){ same._cart = _liveCart; activeProc = same; }   // keep cart even if status changed
-      else { activeProc._cart = _liveCart; }                        // not on sheet yet (local id) — keep as-is
-    } else {
-      // not mid-procedure: offer to resume an Open one, restoring any server-saved cart
-      const op = state.procedures.find(p=>p.status==='Open');
-      if(op){
-        activeProc = op;
-        if(op.cartJSON){ try{ op._cart = JSON.parse(op.cartJSON); }catch(e){ op._cart = op._cart||[]; } }
+    // rebuild the room map
+    _procByRoom = {};
+    // 1) re-attach rooms that were live in memory (keep their carts, even local-id ones)
+    Object.keys(_liveByRoom).forEach(room=>{ const L=_liveByRoom[room];
+      const same = state.procedures.find(p=>p.procedureId===L.id);
+      if(same){ same._cart = L.cart; if(same.room||room) same.room = same.room||room; _procByRoom[room]=same; }
+      else if(L.local){ L.obj._cart = L.cart; _procByRoom[room]=L.obj; }   // not on sheet yet
+    });
+    // 2) place any Open procedures from the sheet into their room slot (fresh load / another device)
+    state.procedures.filter(p=>p.status==='Open').forEach(p=>{
+      const room = PROC_ROOMS.indexOf(p.room)>=0 ? p.room : PROC_ROOMS[0];
+      if(!_procByRoom[room]){
+        if(p.cartJSON){ try{ p._cart = JSON.parse(p.cartJSON); }catch(e){ p._cart = p._cart||[]; } }
+        _procByRoom[room] = p;
       }
-    }
+    });
     state.gasChecks = (data.gasChecks||[]).map(g=>({date:g.Date?String(g.Date).slice(0,10):'', by:g.By||'',
       o2L:g.O2_LeftBank??'', o2R:g.O2_RightBank??'', o2P:g.O2_Pipeline??'', o2Use:g.O2_InUseBank||'',
       o2Deliv:g.O2_DeliveryBooked==='Yes',
@@ -5047,6 +5312,12 @@ async function loadAll(){
       func:a.Function||'', supplier:a.Supplier||'', phone:a.SupplierContact?String(a.SupplierContact):'',
       loc:a.Location||'', last:a.LastMaintenance||null, next:a.NextMaintenanceDue||null,
       status:a.Status||'Working', notes:a.Notes||''}));
+    state.samples = (data.samples||[]).map(s=>({ id:String(s.SampleID||''), date:s.Date?String(s.Date).slice(0,10):'',
+      initials:String(s.PatientInitials||''), pat:String(s.PATNumber||''), surgeon:String(s.Surgeon||''),
+      specimenNo:String(s.SpecimenNo||''), details:String(s.SampleDetails||''), category:String(s.Category||''),
+      formalin:String(s.Formalin||''), collected:s.DateCollected?String(s.DateCollected).slice(0,10):'',
+      sent:s.DateSent?String(s.DateSent).slice(0,10):'', result:s.DateResult?String(s.DateResult).slice(0,10):'',
+      by:String(s.By||''), notes:String(s.Notes||'') }));
     state.stores = (data.stores||[]).filter(s=>s.Store)
       .map(s=>({_row:s._row, tracker:String(s.Tracker||'').toLowerCase(), store:String(s.Store)}));
     data.barcodeLinks.forEach(b=>{
@@ -5074,6 +5345,9 @@ try { session = JSON.parse(localStorage.getItem('bollin_session')||'null'); } ca
 if(session) myName = session.displayName || '';
 
 function isAdmin(){ const r = session && session.role; return r==='admin' || r==='superadmin'; }
+const ROLE_RANK = { common:0, staff:1, admin:2, superadmin:3 };
+function roleRank(){ return (session && ROLE_RANK[session.role]) || 0; }
+function isStaffPlus(){ return roleRank()>=1; }
 const PERMS = {
   admin:  {add:1, edit:1, labels:1, values:1, stocktake:1, implants:1, dispatch:1, receive:1, respond:1, ack:1, alerts:1, instr:1, reports:1, obsolete:1, stores:1, assets:1, useedit:1, sticker:1},
   superadmin: {add:1, edit:1, labels:1, values:1, stocktake:1, implants:1, dispatch:1, receive:1, respond:1, ack:1, alerts:1, instr:1, reports:1, obsolete:1, stores:1, assets:1, useedit:1, sticker:1},
@@ -5146,6 +5420,7 @@ function viewAllowed(v){
   if(v==='assets') return can('assets');
   if(v==='stickers') return can('sticker');
   if(v==='procedures') return true;   // all roles can run procedures (financials hidden inside)
+  if(v==='samples') return isStaffPlus();   // staff and up
   if(v==='users') return isAdmin();
   if(v==='rota') return !!(session && session.role==='superadmin');
   return true;
