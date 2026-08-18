@@ -3365,20 +3365,22 @@ state.procedures = state.procedures || [];
 state.procLines = state.procLines || [];
 // ---- concurrent procedure costing: one open case PER ROOM ----
 // _procByRoom maps room -> procedure object; _procRoom is the room currently on screen.
-// activeProc stays as a live accessor into that map so every existing call keeps working.
+// activeProc is a PLAIN variable that always points at the current room's procedure.
+// Call procSyncActive() after any change to _procByRoom or _procRoom to keep it in step.
 const PROC_ROOMS = ['Theatre 1','Theatre 2','Minor ops'];
 let _procByRoom = {};           // { 'Theatre 1': {..proc..}, ... }
 let _procRoom = PROC_ROOMS[0];  // the room whose console is showing
-Object.defineProperty(window, 'activeProc', {
-  get(){ return _procByRoom[_procRoom] || null; },
-  set(v){ if(v) _procByRoom[_procRoom] = v; else delete _procByRoom[_procRoom]; },
-  configurable:true
-});
-var activeProc;                 // hoisted alias; the defineProperty above backs it
+let activeProc = null;          // the current room's open procedure (or null)
+function procSyncActive(){ activeProc = _procByRoom[_procRoom] || null; return activeProc; }
+function procClearRoom(id){
+  // remove the procedure with this id from its room slot (used on end/cancel)
+  Object.keys(_procByRoom).forEach(r=>{ if(_procByRoom[r] && _procByRoom[r].procedureId===id) delete _procByRoom[r]; });
+  procSyncActive();
+}
 function procAnyActive(){ return Object.keys(_procByRoom).length>0; }
 function procRoomsRunning(){ return PROC_ROOMS.filter(r=>_procByRoom[r]); }
 
-function procActive(){ return !!window.activeProc; }
+function procActive(){ return !!activeProc; }
 
 function procView(){
   const open = state.procedures.filter(p=>p.status==='Open');
@@ -3394,10 +3396,10 @@ function procView(){
   return `<h1>Procedure case costing</h1>
     <div class="sub">Track exactly what each surgeon and procedure consumes. Each room runs its own case at the same time — pick the room below. Scanning adds to <strong>the room shown here</strong>.${runningCount>1?` <strong style="color:var(--pine)">${runningCount} cases running now.</strong>`:''}</div>
     <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap">${tabs}</div>
-    ${window.activeProc ? procConsolePanel() : procStartPanel(open)}
+    ${activeProc ? procConsolePanel() : procStartPanel(open)}
     ${procHistoryPanel()}`;
 }
-function procSwitchRoom(r){ if(PROC_ROOMS.indexOf(r)>=0){ _procRoom=r; render(); } }
+function procSwitchRoom(r){ if(PROC_ROOMS.indexOf(r)>=0){ _procRoom=r; procSyncActive(); render(); } }
 
 function procStartPanel(open){
   return `
@@ -3423,7 +3425,7 @@ function procStartPanel(open){
 }
 
 function procConsolePanel(){
-  const p = window.activeProc;
+  const p = activeProc;
   const cart = procCart();
   const showMoney = (session && isAdmin());   // financials ADMIN ONLY (#3)
   const total = cart.reduce((s,l)=>s+(l.unitCost===''?0:Number(l.unitCost)*l.qty),0);
@@ -3473,7 +3475,7 @@ function procConsolePanel(){
         <button class="btn" style="padding:12px 20px" onclick="procTempSave(false)" title="Save your progress to the server without ending. Stock is NOT touched.">💾 Save progress</button>
         <button class="btn primary" style="padding:12px 24px" onclick="endProc()">■ End procedure &amp; consume stock</button>
         ${(session&&isAdmin())?`<button class="btn" onclick="downloadProcPDF('${p.procedureId}')">Download case sheet PDF</button>`:''}
-        <span id="procSaveState" style="color:var(--ink-soft);font-size:12.5px">${window.activeProc&&window.activeProc._savedAt?'All changes saved':'Not saved yet'}</span>
+        <span id="procSaveState" style="color:var(--ink-soft);font-size:12.5px">${activeProc&&activeProc._savedAt?'All changes saved':'Not saved yet'}</span>
         <span style="margin-left:auto;color:var(--ink-soft);font-size:13px">${cart.length} line(s)</span>
       </div>
     </div>`;
@@ -3522,6 +3524,7 @@ async function startProc(){
   const localId = 'PROC-LOCAL-' + Date.now();
   _procByRoom[room] = {procedureId:localId, surgeon, procedure, date, patientRef, room, status:'Open', totalCost:0, by:myName||''};
   state.procedures.push(_procByRoom[room]);
+  procSyncActive();
   render(); toast(room+': procedure started — scan items to consume');
   if(LIVE){
     try{
@@ -3535,7 +3538,7 @@ async function startProc(){
 // A procedure keeps a local "cart" of consumed lines. Stock is NOT touched on each
 // scan — it is only decremented when the procedure is ended. This means a mistaken
 // item or wrong quantity can be fixed freely during the procedure with no stock impact.
-function procCart(){ return window.activeProc ? (window.activeProc._cart = window.activeProc._cart || []) : []; }
+function procCart(){ return activeProc ? (activeProc._cart = activeProc._cart || []) : []; }
 
 function procConsumeScan(it){
   const cart = procCart();
@@ -3631,7 +3634,7 @@ function procPickChoose(ix){
 // ---- temporary save (security net): persist the cart to the sheet without ending ----
 let _procSaving = false;
 async function procTempSave(silent){
-  if(!window.activeProc) return;
+  if(!activeProc) return;
   const cart = procCart();
   if(!silent && cart.length>1){
     // manual "Save progress" tidies the list A→Z; while scanning it stays in scan order
@@ -3642,10 +3645,10 @@ async function procTempSave(silent){
   if(_procSaving) return;
   _procSaving = true;
   try{
-    await api({action:'procSaveCart', procedureId:window.activeProc.procedureId,
+    await api({action:'procSaveCart', procedureId:activeProc.procedureId,
       cart: cart.map(l=>({tracker:l.tracker, code:l.code||'', barcode:l.barcode||'',
         name:l.name, qty:l.qty, unitCost:(l.unitCost===''?'':l.unitCost)})), by:myName||''});
-    window.activeProc._savedAt = new Date();
+    activeProc._savedAt = new Date();
     if(!silent) toast('Progress saved ✓ ('+cart.length+' lines) — safe to close or refresh');
     else { const b=document.getElementById('procSaveState'); if(b) b.textContent='All changes saved'; }
   }catch(err){ if(!silent) toast('Save failed — '+err.message); }
@@ -3654,20 +3657,20 @@ async function procTempSave(silent){
 // autosave the cart shortly after each change, so a crash never loses more than a few seconds
 let _procAutosaveTimer = null;
 function procAutosave(){
-  if(!window.activeProc || !LIVE) return;
+  if(!activeProc || !LIVE) return;
   const b=document.getElementById('procSaveState'); if(b) b.textContent='Saving…';
   clearTimeout(_procAutosaveTimer);
   _procAutosaveTimer = setTimeout(()=>procTempSave(true), 1200);
 }
 
 async function endProc(){
-  if(!window.activeProc) return;
+  if(!activeProc) return;
   const cart = procCart();
   const total = cart.reduce((s,l)=>s+(l.unitCost===''?0:Number(l.unitCost)*l.qty),0);
   if(!cart.length){ if(!confirm('End this procedure with no items added?')) return; }
   else if(!confirm('End procedure and consume '+cart.length+' item line(s) from stock now?'+
     (total?' (£'+total.toFixed(2)+' total)':'')+'\n\nThis is when stock is actually decremented.')) return;
-  const id = window.activeProc.procedureId;
+  const id = activeProc.procedureId;
 
   if(!LIVE){
     // demo mode: reflect stock locally
@@ -3675,7 +3678,7 @@ async function endProc(){
       ((l.code&&i.code===l.code)||(l.barcode&&i.barcode===l.barcode)||i.name===l.name));
       if(it) it.qty = Math.max(0, it.qty - l.qty); });
     const p = state.procedures.find(x=>x.procedureId===id); if(p){ p.status='Closed'; p.totalCost=total; }
-    window.activeProc = null; render(); toast('Procedure ended (demo)');
+    procClearRoom(id); render(); toast('Procedure ended (demo)');
     return;
   }
 
@@ -3695,11 +3698,11 @@ async function endProc(){
         '\n\nThe other items were consumed. Please check these manually.');
     }
     // success (fully or partially) — clear local cart and refresh from sheet
-    if(window.activeProc) window.activeProc._cart = [];
-    window.activeProc = null;
+    if(activeProc) activeProc._cart = [];
+    procClearRoom(id);
     window._justEndedProc = id;          // stop a stale reload resurrecting it
     await loadAll();
-    if(window.activeProc && window.activeProc.procedureId===window._justEndedProc) window.activeProc = null;
+    procClearRoom(id);                   // in case the reload re-added it before it flipped to Closed
     window._justEndedProc = null;
     toast('Procedure ended — stock updated');
   }catch(err){
@@ -3710,36 +3713,39 @@ async function endProc(){
 
 // ---- #2: cancel an open procedure started by mistake (nothing consumed yet) ----
 async function cancelProc(){
-  if(!window.activeProc) return;
+  if(!activeProc) return;
   const cart = procCart();
   if(!confirm('Cancel this procedure?\n\n'+
     (cart.length? cart.length+' item line(s) in the list will be DISCARDED. ':'')+
     'Nothing has been taken from stock, so no inventory changes are needed.\n\nThis cannot be undone.')) return;
-  const id = window.activeProc.procedureId;
+  const id = activeProc.procedureId;
   const ix = state.procedures.findIndex(x=>x.procedureId===id);
   if(ix>=0) state.procedures.splice(ix,1);
-  window.activeProc = null;
+  procClearRoom(id);
   render(); toast('Procedure cancelled — nothing was consumed');
   if(LIVE && !String(id).startsWith('PROC-LOCAL')){
-    try{ await api({action:'procCancel', procedureId:id, by:myName||''}); loadAll(); }
-    catch(err){ toast('Cancel not saved — '+err.message); loadAll(); }
+    window._justEndedProc = id;
+    try{ await api({action:'procCancel', procedureId:id, by:myName||''}); await loadAll(); }
+    catch(err){ toast('Cancel not saved — '+err.message); await loadAll(); }
+    procClearRoom(id);
+    window._justEndedProc = null;
   }
 }
 
 // ---- #1: admin corrects surgeon / procedure / date / patient ref ----
 async function procEditMeta(){
-  if(!window.activeProc || !(session&&isAdmin())) return;
-  const surgeon = prompt('Surgeon:', window.activeProc.surgeon||''); if(surgeon===null) return;
-  const procedure = prompt('Procedure:', window.activeProc.procedure||''); if(procedure===null) return;
-  const date = prompt('Date (YYYY-MM-DD):', window.activeProc.date? String(window.activeProc.date).slice(0,10):todayISO()); if(date===null) return;
-  const patientRef = prompt('Patient ref (optional):', window.activeProc.patientRef||''); if(patientRef===null) return;
-  window.activeProc.surgeon=surgeon.trim(); window.activeProc.procedure=procedure.trim();
-  window.activeProc.date=date.trim(); window.activeProc.patientRef=patientRef.trim();
+  if(!activeProc || !(session&&isAdmin())) return;
+  const surgeon = prompt('Surgeon:', activeProc.surgeon||''); if(surgeon===null) return;
+  const procedure = prompt('Procedure:', activeProc.procedure||''); if(procedure===null) return;
+  const date = prompt('Date (YYYY-MM-DD):', activeProc.date? String(activeProc.date).slice(0,10):todayISO()); if(date===null) return;
+  const patientRef = prompt('Patient ref (optional):', activeProc.patientRef||''); if(patientRef===null) return;
+  activeProc.surgeon=surgeon.trim(); activeProc.procedure=procedure.trim();
+  activeProc.date=date.trim(); activeProc.patientRef=patientRef.trim();
   render(); toast('Details updated');
-  if(LIVE && !String(window.activeProc.procedureId).startsWith('PROC-LOCAL')){
-    try{ await api({action:'procUpdateMeta', procedureId:window.activeProc.procedureId,
-      surgeon:window.activeProc.surgeon, procedure:window.activeProc.procedure,
-      date:window.activeProc.date, patientRef:window.activeProc.patientRef, by:myName||''}); }
+  if(LIVE && !String(activeProc.procedureId).startsWith('PROC-LOCAL')){
+    try{ await api({action:'procUpdateMeta', procedureId:activeProc.procedureId,
+      surgeon:activeProc.surgeon, procedure:activeProc.procedure,
+      date:activeProc.date, patientRef:activeProc.patientRef, by:myName||''}); }
     catch(err){ toast('Not saved — '+err.message); }
   }
 }
@@ -3747,7 +3753,7 @@ async function procEditMeta(){
 // ---- #1: admin reopens a closed procedure; consumed stock is returned until re-ended ----
 async function procEditClosed(procId){
   if(!(session&&isAdmin())) return;
-  if(window.activeProc){ toast('Finish or cancel the current procedure first'); return; }
+  if(activeProc){ toast('Finish or cancel the current procedure first'); return; }
   if(!confirm('Reopen this procedure for editing?\n\nEverything it consumed will be RETURNED to stock now, and consumed again (with your corrections) when you end it. The case sheet will reflect the corrected list.')) return;
   if(!LIVE){ toast('Not available in demo mode'); return; }
   toast('Reopening — returning its stock…');
@@ -3762,7 +3768,12 @@ async function procEditClosed(procId){
       p.status='Open';
       p._cart = (res.cart||[]).length ? res.cart :
         (p.cartJSON ? (function(){try{return JSON.parse(p.cartJSON);}catch(e){return [];}})() : []);
-      window.activeProc = p;
+      // place the reopened case into its room (its saved room, or the room on screen if free)
+      const room = PROC_ROOMS.indexOf(p.room)>=0 ? p.room : _procRoom;
+      p.room = room;
+      _procByRoom[room] = p;
+      _procRoom = room;
+      procSyncActive();
     }
     render(); toast('Procedure reopened — adjust the list, then end it again');
   }catch(err){ toast('Could not reopen — '+err.message); loadAll(); }
@@ -5289,11 +5300,13 @@ async function loadAll(){
     // 2) place any Open procedures from the sheet into their room slot (fresh load / another device)
     state.procedures.filter(p=>p.status==='Open').forEach(p=>{
       const room = PROC_ROOMS.indexOf(p.room)>=0 ? p.room : PROC_ROOMS[0];
+      if(p.procedureId===window._justEndedProc) return;   // don't resurrect a just-ended case
       if(!_procByRoom[room]){
         if(p.cartJSON){ try{ p._cart = JSON.parse(p.cartJSON); }catch(e){ p._cart = p._cart||[]; } }
         _procByRoom[room] = p;
       }
     });
+    procSyncActive();   // keep the plain activeProc pointer in step with the rebuilt room map
     state.gasChecks = (data.gasChecks||[]).map(g=>({date:g.Date?String(g.Date).slice(0,10):'', by:g.By||'',
       o2L:g.O2_LeftBank??'', o2R:g.O2_RightBank??'', o2P:g.O2_Pipeline??'', o2Use:g.O2_InUseBank||'',
       o2Deliv:g.O2_DeliveryBooked==='Yes',
